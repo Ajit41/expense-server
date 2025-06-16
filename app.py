@@ -1,12 +1,12 @@
 import os
 import json
 from flask import Flask, request, jsonify
-import google.generativeai as genai
+import openai
 
 app = Flask(__name__)
 
-genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-model = genai.GenerativeModel("gemini-1.5-pro-latest")
+# Configure OpenAI
+openai.api_key = os.environ["OPENAI_API_KEY"]
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
@@ -16,7 +16,7 @@ def ai_insight():
     query = data.get("query", "")
     budget = data.get("budget", 0)
     days_left = data.get("days_left", 0)
-    
+
     prompt = f"""
 You are a smart finance assistant. 
 Analyze the user's transactions (as JSON) for the selected period: {period}.
@@ -42,25 +42,33 @@ Here are the user's transactions:
 Budget for this month: {budget}
 Days left in month: {days_left}
 """
-    # Gemini API call
-    response = model.generate_content(prompt)
-    # Try to handle both response.text and response.parts[0].text
-    try:
-        response_text = response.text
-    except AttributeError:
-        response_text = response.parts[0].text
 
-    insights = []
+    try:
+        # OpenAI GPT-3.5 Turbo call
+        completion = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a smart finance assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7
+        )
+        response_text = completion.choices[0].message['content']
+    except Exception as e:
+        print("OpenAI error:", e)
+        return jsonify({"insights": [{"type": "error", "header": "AI Error", "detail": str(e), "category": "", "transaction_indices": []}]})
+
+    # Parse response
     try:
         insights = json.loads(response_text)
-        # If for any reason the result is not a list, wrap it
         if not isinstance(insights, list):
             insights = [insights]
     except Exception as e:
-        print("Error parsing Gemini response as JSON:", e)
-        # fallback: show as a single insight
-        insights = [{"header": "AI Response", "detail": response_text, "type": "general", "category": "", "transaction_indices": []}]
+        print("Error parsing GPT response as JSON:", e)
+        insights = [{"type": "general", "header": "AI Response", "detail": response_text, "category": "", "transaction_indices": []}]
+    
     return jsonify({"insights": insights})
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
