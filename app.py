@@ -5,7 +5,7 @@ from openai import OpenAI
 
 app = Flask(__name__)
 
-# Initialize OpenAI client
+# Load OpenAI API key
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 @app.route('/ai-insight', methods=['POST'])
@@ -44,7 +44,8 @@ Days left in month: {days_left}
 """
 
     try:
-        response = client.chat.completions.create(
+        # OpenAI GPT-3.5 Turbo (new SDK usage)
+        chat_completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a smart finance assistant."},
@@ -52,7 +53,7 @@ Days left in month: {days_left}
             ],
             temperature=0.7
         )
-        response_text = response.choices[0].message.content
+        response_text = chat_completion.choices[0].message.content
     except Exception as e:
         print("OpenAI error:", e)
         return jsonify({
@@ -65,20 +66,25 @@ Days left in month: {days_left}
             }]
         })
 
-    # Try parsing response as JSON
-try:
-    # Remove markdown formatting like ```json ... ```
-    if response_text.startswith("```json"):
-        response_text = response_text.strip().removeprefix("```json").removesuffix("```").strip()
-    elif response_text.startswith("```"):
-        response_text = response_text.strip().removeprefix("```").removesuffix("```").strip()
+    # Clean markdown blocks like ```json ... ```
+    try:
+        if response_text.startswith("```json"):
+            response_text = response_text.removeprefix("```json").removesuffix("```").strip()
+        elif response_text.startswith("```"):
+            response_text = response_text.removeprefix("```").removesuffix("```").strip()
 
-    insights = json.loads(response_text)
-    if not isinstance(insights, list):
-        insights = [insights]
-except Exception as e:
-    print("Error parsing GPT response as JSON:", e)
-    insights = [{"type": "general", "header": "AI Response", "detail": response_text, "category": "", "transaction_indices": []}]
+        insights = json.loads(response_text)
+        if not isinstance(insights, list):
+            insights = [insights]
+    except Exception as e:
+        print("Error parsing GPT response as JSON:", e)
+        insights = [{
+            "type": "general",
+            "header": "AI Response",
+            "detail": response_text,
+            "category": "",
+            "transaction_indices": []
+        }]
 
     return jsonify({"insights": insights})
 
