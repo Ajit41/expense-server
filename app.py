@@ -66,19 +66,19 @@ Days left in month: {days_left}
         })
 
     # Try parsing response as JSON
-    try:
-        insights = json.loads(response_text)
-        if not isinstance(insights, list):
-            insights = [insights]
-    except Exception as e:
-        print("Error parsing GPT response as JSON:", e)
-        insights = [{
-            "type": "general",
-            "header": "AI Response",
-            "detail": response_text,
-            "category": "",
-            "transaction_indices": []
-        }]
+try:
+    # Remove markdown formatting like ```json ... ```
+    if response_text.startswith("```json"):
+        response_text = response_text.strip().removeprefix("```json").removesuffix("```").strip()
+    elif response_text.startswith("```"):
+        response_text = response_text.strip().removeprefix("```").removesuffix("```").strip()
+
+    insights = json.loads(response_text)
+    if not isinstance(insights, list):
+        insights = [insights]
+except Exception as e:
+    print("Error parsing GPT response as JSON:", e)
+    insights = [{"type": "general", "header": "AI Response", "detail": response_text, "category": "", "transaction_indices": []}]
 
     return jsonify({"insights": insights})
 
