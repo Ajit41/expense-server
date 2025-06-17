@@ -5,8 +5,8 @@ from openai import OpenAI
 
 app = Flask(__name__)
 
-# Load OpenAI API key
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+# Load OpenAI API key from environment
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
@@ -18,7 +18,7 @@ def ai_insight():
     days_left = data.get("days_left", 0)
 
     prompt = f"""
-You are a smart finance assistant. 
+You are a smart finance assistant.
 Analyze the user's transactions (as JSON) for the selected period: {period}.
 
 Return a JSON array, where each item is:
@@ -31,8 +31,8 @@ Return a JSON array, where each item is:
 Rules:
 1. For "topCategory", return top 3 spending categories, each as a separate insight.
 2. For "savingsTip", give a dynamic tip based on user's spending (not a generic one).
-3. For "forecast", estimate the user's end-of-month spend and what categories need control. Use the provided 'budget' value for this month (if given), and days left.
-4. For "upcomingBill", only include if at least one transaction has "isRecurring" true.
+3. For "forecast", estimate the user's end-of-month spend and what categories need control. Use the provided 'budget' and 'days_left'.
+4. For "upcomingBill", only include if any transaction has "isRecurring" true.
 5. Do not include "User Query Response" insights.
 6. Keep headers short, like "Top Category: Food" or "Forecast: ₹34,000".
 
@@ -44,8 +44,7 @@ Days left in month: {days_left}
 """
 
     try:
-        # OpenAI GPT-3.5 Turbo (new SDK usage)
-        chat_completion = client.chat.completions.create(
+        completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a smart finance assistant."},
@@ -53,9 +52,8 @@ Days left in month: {days_left}
             ],
             temperature=0.7
         )
-        response_text = chat_completion.choices[0].message.content
+        response_text = completion.choices[0].message.content.strip()
     except Exception as e:
-        print("OpenAI error:", e)
         return jsonify({
             "insights": [{
                 "type": "error",
@@ -66,18 +64,14 @@ Days left in month: {days_left}
             }]
         })
 
-    # Clean markdown blocks like ```json ... ```
+    # Try to parse as JSON array
     try:
-        if response_text.startswith("```json"):
-            response_text = response_text.removeprefix("```json").removesuffix("```").strip()
-        elif response_text.startswith("```"):
-            response_text = response_text.removeprefix("```").removesuffix("```").strip()
-
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[-1].split("```")[0].strip()
         insights = json.loads(response_text)
         if not isinstance(insights, list):
             insights = [insights]
     except Exception as e:
-        print("Error parsing GPT response as JSON:", e)
         insights = [{
             "type": "general",
             "header": "AI Response",
@@ -85,9 +79,8 @@ Days left in month: {days_left}
             "category": "",
             "transaction_indices": []
         }]
-
+    
     return jsonify({"insights": insights})
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
