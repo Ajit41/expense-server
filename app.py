@@ -1,12 +1,12 @@
 import os
 import json
 from flask import Flask, request, jsonify
-import openai
+from openai import OpenAI
 
 app = Flask(__name__)
 
-# Configure OpenAI
-openai.api_key = os.environ["OPENAI_API_KEY"]
+# Initialize OpenAI client
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
@@ -44,8 +44,7 @@ Days left in month: {days_left}
 """
 
     try:
-        # OpenAI GPT-3.5 Turbo call
-        completion = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a smart finance assistant."},
@@ -53,20 +52,34 @@ Days left in month: {days_left}
             ],
             temperature=0.7
         )
-        response_text = completion.choices[0].message['content']
+        response_text = response.choices[0].message.content
     except Exception as e:
         print("OpenAI error:", e)
-        return jsonify({"insights": [{"type": "error", "header": "AI Error", "detail": str(e), "category": "", "transaction_indices": []}]})
+        return jsonify({
+            "insights": [{
+                "type": "error",
+                "header": "AI Error",
+                "detail": str(e),
+                "category": "",
+                "transaction_indices": []
+            }]
+        })
 
-    # Parse response
+    # Try parsing response as JSON
     try:
         insights = json.loads(response_text)
         if not isinstance(insights, list):
             insights = [insights]
     except Exception as e:
         print("Error parsing GPT response as JSON:", e)
-        insights = [{"type": "general", "header": "AI Response", "detail": response_text, "category": "", "transaction_indices": []}]
-    
+        insights = [{
+            "type": "general",
+            "header": "AI Response",
+            "detail": response_text,
+            "category": "",
+            "transaction_indices": []
+        }]
+
     return jsonify({"insights": insights})
 
 
