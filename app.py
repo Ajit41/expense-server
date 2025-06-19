@@ -4,13 +4,11 @@ from flask import Flask, request, jsonify
 from openai import OpenAI
 
 app = Flask(__name__)
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-@app.route("/", methods=["GET"])
-def home():
-    return "✅ AI Insight Server is running!"
+# Load OpenAI API key
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-@app.route("/ai-insight", methods=["POST"])
+@app.route('/ai-insight', methods=['POST'])
 def ai_insight():
     data = request.get_json()
     tx_list = data.get("transactions", [])
@@ -19,70 +17,110 @@ def ai_insight():
     budget = data.get("budget", 0)
     days_left = data.get("days_left", 0)
 
-    prompt = f"""
-You are a smart finance assistant. Analyze the user's transactions for the selected period: {period}.
+    # --- DASHBOARD SUMMARY REQUEST ---
+    if not query:
+        prompt = f"""
+You are a smart finance dashboard assistant.
 
-Return a JSON object like this:
-{{
-  "highSpendCategory": ["..."],
-  "anomalyDetection": ["..."],
-  "savingsTip": "...",
-  "forecast": "...",
-  "upcomingBill": "..."
-}}
+Analyze the user's transactions (as JSON) for the selected period: {period}.
 
-Rules:
-1. For "highSpendCategory", give 1–3 top spending categories with amounts and explanation.
-2. For "anomalyDetection", flag any unusually high or rare spends with reasoning.
-3. For "savingsTip", give one personalized tip based on discretionary spend (not a generic one).
-4. For "forecast", estimate end-of-month spend using budget ₹{budget} and {days_left} days left.
-5. For "upcomingBill", only include if any transaction has "isRecurring": true.
-6. Omit markdown/code blocks. Return only JSON.
+Return ONE JSON object, with a single key "dashboard_summary" having the following fields and grouping:
 
-Transactions:
+- "period_label": e.g. "This Month (Jun 25)"
+- "month_comparison": {{"label": "Last month vs this month", "text": "Expense up by xx% compared to previous month"}}
+- "top_high_spend": {{"label": "Top 3 High Spend", "categories": [ {{"category": "...", "amount": ..., "text": "..."}}, ... ]}}
+- "anomaly_detected": {{"label": "Top Anomaly Detected", "anomalies": [ {{"category": "...", "amount": ..., "text": "..."}}, ... ]}}
+- "forecast": {{"label": "This Month Forecast", "text": "..."}}
+- "savings_tip": {{"label": "Saving Tip", "text": "..."}}
+- "upcoming_bills": {{"label": "Upcoming Bills / Recurring Transactions", "bills": [ {{"category": "...", "amount": ..., "text": "..."}}, ... ]}}
+
+Fill only if data is relevant, else leave as an empty list/empty string.
+
+User's transactions:
 {json.dumps(tx_list)}
+
+Budget for this month: {budget}
+Days left in month: {days_left}
 """
 
+    # --- INSIGHT/CHAT REQUEST ---
+    else:
+        prompt = f"""
+You are a smart finance assistant for insights and chat.
+
+Analyze the user's transactions (as JSON) for the selected period: {period}.
+
+If the user query is present ("{query}"):
+1. Find the answer to the query and reply in a header (1 line).
+2. Provide up to 10 matching transactions (full JSON details, not just indices).
+3. For insights, return a list "insight_groups": each group has:
+    - "header": short summary, e.g. "High spend in Food"
+    - "detail": short explanation, e.g. "₹4800 spent, 20% higher than last month"
+    - "type": one of: "highSpendCategory", "anomalyDetection", "forecast", "savingsTip", "upcomingBill"
+    - "category": category if applicable, else empty
+    - "transactions": array of matching transactions (full JSON)
+
+The response JSON format MUST be:
+
+{{
+  "chat": {{
+    "header": "...answer to user query...",
+    "entries": [ ... up to 10 full transaction objects ... ]
+  }},
+  "insight_groups": [
+    {{
+      "header": "...",
+      "detail": "...",
+      "type": "...",
+      "category": "...",
+      "transactions": [ ... matching transactions ... ]
+    }},
+    ...
+  ]
+}}
+
+Do not include explanations outside the JSON. All outputs must be inside the response JSON.
+
+User query: "{query}"
+
+User's transactions:
+{json.dumps(tx_list)}
+
+Budget for this month: {budget}
+Days left in month: {days_left}
+"""
+
+    # ----- CALL OPENAI -----
     try:
-        response = client.chat.completions.create(
+        chat_completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a smart finance assistant."},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.5
+            temperature=0.65
         )
+        response_text = chat_completion.choices[0].message.content
+    except Exception as e:
+        print("OpenAI error:", e)
+        return jsonify({"error": str(e)})
 
-        result = response.choices[0].message.content.strip()
-
-        # Clean markdown wrappers like ```json
-        if result.startswith("```json"):
-            result = result.removeprefix("```json").removesuffix("```").strip()
-        elif result.startswith("```"):
-            result = result.removeprefix("```").removesuffix("```").strip()
-
-        json_output = json.loads(result)
-
-        # Ensure all required fields exist
+    # Clean markdown blocks like ```json ... ```
+    try:
+        if response_text.startswith("```json"):
+            response_text = response_text.removeprefix("```json").removesuffix("```").strip()
+        elif response_text.startswith("```"):
+            response_text = response_text.removeprefix("```").removesuffix("```").strip()
+        resp_json = json.loads(response_text)
+    except Exception as e:
+        print("Error parsing GPT response as JSON:", e)
+        # Fallback: return as string for debugging
         return jsonify({
-            "highSpendCategory": json_output.get("highSpendCategory", []),
-            "anomalyDetection": json_output.get("anomalyDetection", []),
-            "savingsTip": json_output.get("savingsTip", ""),
-            "forecast": json_output.get("forecast", ""),
-            "upcomingBill": json_output.get("upcomingBill", ""),
-            "error": ""
+            "parse_error": str(e),
+            "raw_response": response_text
         })
 
-    except Exception as e:
-        print("⚠️ AI insight error:", str(e))
-        return jsonify({
-            "highSpendCategory": [],
-            "anomalyDetection": [],
-            "savingsTip": "",
-            "forecast": "",
-            "upcomingBill": "",
-            "error": str(e)
-        }), 500
+    return jsonify(resp_json)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
