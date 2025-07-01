@@ -76,11 +76,11 @@ INPUTS:
 TASK:
 1. Analyze only the transactions where "Period"="{period}". For previous month, use only "Period"="{prev_period}".
 2. For every insight in "insight_groups" (except "Forecast", "Savings Trend", and "Cash Flow") and for every Smart Suggestion, your response must always include the following format embedded in the message: "₹{{amt}} at {{category}} ({{count}} entries)" or "₹{{amt}} in {{category}} ({{count}} entries)", where:
-   - {{amt}} is the total Amount for that category/insight,
-   - {{category}} is the relevant Category,
-   - {{count}} is the entry count.
+   - {{amt}} is the sum total "Amount" for that category/insight,
+   - {{category}} is the relevant "Category" or insight group,
+   - {{count}} is the exact number of transactions ("entries") for that insight or group.
+   This format must always appear in your message, unless the insight is "Forecast", "Savings Trend", or "Cash Flow".
    Write a detailed, user-friendly message as if you are speaking directly to the user—be positive, conversational, and concise. Never leave out the amount, category, and entry count from any applicable message.
-   Exclude this pattern ONLY for "Forecast", "Savings Trend", and "Cash Flow" insights (which can be just amounts and trends).
 3. For each insight or chat answer, use encouraging language for positive trends and give actionable, plain English suggestions.
 4. Always include at least 5 unique Smart Suggestions, each with category, amount, and entry count.
 5. **Optional smart trends/alerts**: 
@@ -117,7 +117,6 @@ TASK:
    - "₹12,000 due on credit card next week — avoid late fees by pre-paying."
    - "Your EMI auto-debits on the 3rd — maintain ₹7,500 balance to stay safe."
    - You may invent new Smart Suggestions if you find other interesting, actionable patterns in the user's data.
-
 
 **insight_groups** must include (as relevant):
 - A top-level summary (type "Summary" or "Spending Behavior"), with a custom insight for this period (or state 'no data found' if there are no transactions).
@@ -181,7 +180,7 @@ query: "{query}"
 """
     try:
         chat_completion = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You are a smart finance assistant."},
                 {"role": "user", "content": prompt}
