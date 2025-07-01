@@ -8,14 +8,13 @@ app = Flask(__name__)
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 def extract_period(date_str):
-    """Extract YYYYMM period from date string like 'June 28, 2025 at 12:00:00 AM UTC+5:30'."""
+    """Extract YYYYMM period from Firestore 'Date' field."""
     try:
         date_clean = str(date_str).split(" UTC")[0]
         dt = datetime.strptime(date_clean.strip(), "%B %d, %Y at %I:%M:%S %p")
         return dt.strftime("%Y%m")
     except Exception:
         try:
-            # If it's an int timestamp (ms)
             if isinstance(date_str, (int, float)):
                 dt = datetime.utcfromtimestamp(date_str / 1000)
                 return dt.strftime("%Y%m")
@@ -24,7 +23,6 @@ def extract_period(date_str):
     return None
 
 def get_prev_period(period_str):
-    """Given YYYYMM as string, return previous month as YYYYMM."""
     try:
         dt = datetime.strptime(period_str, "%Y%m")
         if dt.month == 1:
@@ -39,55 +37,53 @@ def get_prev_period(period_str):
 def ai_insight():
     data = request.get_json()
     tx_list = data.get("transactions", [])
-    period = data.get("period", "")  # e.g., "202506"
+    period = data.get("period", "")
     query = data.get("query", "")
     budget = data.get("budget", 0)
     days_left = data.get("days_left", 0)
 
-    # Annotate each transaction with a computed 'period' field
+    # Annotate each transaction with a computed 'Period' field (upper case)
     for tx in tx_list:
-        date_str = tx.get("date", "")
-        if isinstance(date_str, (int, float)):
-            dt = datetime.utcfromtimestamp(date_str / 1000)
-            tx['period'] = dt.strftime("%Y%m")
-        else:
-            tx['period'] = extract_period(date_str)
+        date_str = tx.get("Date", "") or tx.get("date", "")
+        period_val = extract_period(date_str)
+        tx["Period"] = period_val
 
     prev_period = get_prev_period(period)
 
-    # ----------- INSIGHT PROMPT (no query) -----------
     if not query:
         prompt = f"""
 You are an advanced finance insight assistant for a personal expense tracker app.
 
 Strict Data Rules:
-- Use ONLY transactions where 'period' matches the specified period ({period}) for all main insights.
-- For "total expense", sum ONLY transactions with "type"=0 and period={period}.
-- For "total income", sum ONLY transactions with "type"=1 and period={period}.
-- For previous month comparisons, use ONLY transactions with period={prev_period}.
-- For multi-month forecasts/trends, you may use 1–3 previous months ({prev_period} and earlier), but specify which periods you used.
+- Use ONLY transactions where "Period" matches "{period}" for all main insights.
+- For "total expense", sum ONLY transactions where "Type" equals 0 and "Period" is "{period}". Use "Amount" for sums and "Category" for grouping.
+- For "total income", sum ONLY transactions where "Type" equals 1 and "Period" is "{period}".
+- For previous month comparisons, use ONLY transactions with "Period" = "{prev_period}".
+- For Recurring Bill: include ONLY transactions where "IsRecurring" is true and "Period" is "{period}".
+- Always use these field names and capitalization: "Amount", "Category", "Date", "Created", "Datatype", "IsRecurring", "Method", "Note", "RecurringMode", "Reference", "Remarks1", "Transaction", "Type", "Period".
 - Never use or reference data from any other period.
-- Never guess, estimate, or hallucinate numbers—use only provided transaction data in the correct period(s).
+- Never guess or estimate—use only provided transaction data.
 - If there are no matching transactions for the period or previous month, state this clearly in the insight.
 - All date matching must be exact.
 
 INPUTS:
-- "transactions": all user transactions, each with a 'period' property ("YYYYMM").
+- "transactions": all user transactions, each with a "Period" property ("YYYYMM").
 - "period": the current month ("YYYYMM").
 - "prev_period": previous month ("YYYYMM").
 - "budget": budget for the current month (if 0, ignore).
 - "days_left": days left in the month.
 
 TASK:
-1. Analyze only the transactions where period={period}. For previous month, use only period={prev_period}. For multi-month insights, specify which periods.
-2. For each insight or chat answer, write a detailed, user-friendly message as if you are speaking directly to the user—be positive, conversational, and concise.
-   - Use encouraging language for positive trends.
-   - Give clear, actionable suggestions ("You could save ₹2,000 next month by limiting dining out to weekends.").
-   - Always use plain English, showing amounts, entry counts, and category names in context.
-   - For summaries and trends, explain what changed and what it means for the user.
-   - For negative trends, give a positive nudge or an idea for improvement.
-3. Always include at least 5 unique Smart Suggestions, based only on this period's data, with category, amount, and entry count. Each Smart Suggestion must be clearly tied to a specific pattern in the user's data. Never repeat the same suggestion in this period.
-4. **Optional smart trends/alerts**: 
+1. Analyze only the transactions where "Period"="{period}". For previous month, use only "Period"="{prev_period}".
+2. For every insight in "insight_groups" (except "Forecast", "Savings Trend", and "Cash Flow") and for every Smart Suggestion, your response must always include the following format embedded in the message: "₹{{amt}} at {{category}} ({{count}} entries)" or "₹{{amt}} in {{category}} ({{count}} entries)", where:
+   - {{amt}} is the total Amount for that category/insight,
+   - {{category}} is the relevant Category,
+   - {{count}} is the entry count.
+   Write a detailed, user-friendly message as if you are speaking directly to the user—be positive, conversational, and concise. Never leave out the amount, category, and entry count from any applicable message.
+   Exclude this pattern ONLY for "Forecast", "Savings Trend", and "Cash Flow" insights (which can be just amounts and trends).
+3. For each insight or chat answer, use encouraging language for positive trends and give actionable, plain English suggestions.
+4. Always include at least 5 unique Smart Suggestions, each with category, amount, and entry count.
+5. **Optional smart trends/alerts**: 
    - Categories with highest change vs last month (increase/decrease %)
    - Average daily spending (and if up/down)
    - Budget left for key categories
@@ -99,7 +95,7 @@ TASK:
    - Longest Expense Streak: “5 consecutive days with no spend" or "12-day streak of Food expenses.”
    - AI Smart Suggestion: “Consider a monthly pass for coffee shops — 12 visits this month.”
    - You may invent notable trends if you find other interesting, actionable patterns in the user's data. Never repeat the same in this period.
-5. Example Smart Suggestions for inspiration (generate only if the data matches the user's behavior):
+6. Example Smart Suggestions for inspiration (generate only if the data matches the user's behavior):
    - "You dined out 14 times this month — consider limiting to weekends to save ₹2,000."
    - "Ordering food 3× a week? Weekly meal prep could save up to ₹4,000/month."
    - "Try a grocery subscription — 9 visits this month to the same store."
@@ -122,15 +118,16 @@ TASK:
    - "Your EMI auto-debits on the 3rd — maintain ₹7,500 balance to stay safe."
    - You may invent new Smart Suggestions if you find other interesting, actionable patterns in the user's data.
 
+
 **insight_groups** must include (as relevant):
 - A top-level summary (type "Summary" or "Spending Behavior"), with a custom insight for this period (or state 'no data found' if there are no transactions).
-- Income vs Expense (see above for message)
+- Income vs Expense
 - Expense Comparison
 - High Spend: top 3 categories for this month, each with amount and entry count
 - Detected anomalies (if any)
 - Saving Tip
 - Payment Method
-- Recurring Bill
+- Recurring Bill: List all transactions where "IsRecurring" is true and "Period"="{period}". If none, say 'No recurring bills for this month.'
 - Forecast
 - Savings Trend
 - Cash Flow
@@ -149,20 +146,19 @@ prev_period: {prev_period}
 budget: {budget}
 days_left: {days_left}
 """
-    # ----------- CHAT PROMPT (with query) -----------
     else:
         prompt = f"""
 You are an advanced finance chat assistant for a personal expense tracker app.
 
 Strict Data Rules:
-- Use ONLY transactions where 'period' matches the specified period ({period}) for main answers.
-- For previous month comparisons, use ONLY transactions with period={prev_period}.
+- Use ONLY transactions where "Period" matches "{period}" for main answers.
+- For previous month comparisons, use ONLY transactions with "Period"="{prev_period}".
 - For multi-month trends, use only exact periods and specify them.
 - Never guess, estimate, or hallucinate numbers—use only provided transaction data in the correct period(s).
 - If there are no matching transactions for the period or previous month, state this clearly.
 
 INPUTS:
-- "transactions": all user transactions, each with a 'period' property ("YYYYMM").
+- "transactions": all user transactions, each with a "Period" property ("YYYYMM").
 - "period": the current month ("YYYYMM").
 - "prev_period": previous month ("YYYYMM").
 - "budget": budget for the current month (if 0, ignore).
