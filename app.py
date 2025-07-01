@@ -1,6 +1,12 @@
-from flask import Flask
+from flask import Flask, request, jsonify
+import os
+import json
+from openai import OpenAI
 
 app = Flask(__name__)
+
+# Initialize OpenAI client with environment variable
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
@@ -180,7 +186,7 @@ query: "{query}"
         })
 
     return jsonify(resp_json)
+
 if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 5000))  # Railway or Render will set PORT
+    port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
