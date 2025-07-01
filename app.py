@@ -7,19 +7,33 @@ from datetime import datetime
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-def extract_period(date_str):
-    """Extract YYYYMM period from Firestore 'Date' field."""
-    try:
-        date_clean = str(date_str).split(" UTC")[0]
-        dt = datetime.strptime(date_clean.strip(), "%B %d, %Y at %I:%M:%S %p")
-        return dt.strftime("%Y%m")
-    except Exception:
+from datetime import datetime, timezone, timedelta
+
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def extract_period(date_value):
+    """
+    Extract YYYYMM period from Firestore 'Date' field.
+    Handles:
+      - Unix timestamp (ms)
+      - String like 'March 10, 2025 at 8:19:00 PM UTC+5:30'
+    Always uses IST for period calculation.
+    """
+    # Case 1: Milliseconds timestamp
+    if isinstance(date_value, (int, float)):
         try:
-            if isinstance(date_str, (int, float)):
-                dt = datetime.utcfromtimestamp(date_str / 1000)
-                return dt.strftime("%Y%m")
+            dt = datetime.fromtimestamp(date_value / 1000, IST)
+            return dt.strftime("%Y%m")
         except Exception:
             pass
+    # Case 2: Firestore string
+    try:
+        main_part = str(date_value).split(' UTC')[0].strip()
+        dt = datetime.strptime(main_part, "%B %d, %Y at %I:%M:%S %p")
+        dt = dt.replace(tzinfo=IST)
+        return dt.strftime("%Y%m")
+    except Exception:
+        pass
     return None
 
 def get_prev_period(period_str):
