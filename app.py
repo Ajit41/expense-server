@@ -1,13 +1,3 @@
-import os
-import json
-from flask import Flask, request, jsonify
-from openai import OpenAI
-
-app = Flask(__name__)
-
-# Load OpenAI API key
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
     data = request.get_json()
@@ -17,80 +7,147 @@ def ai_insight():
     budget = data.get("budget", 0)
     days_left = data.get("days_left", 0)
 
-    # --- DASHBOARD SUMMARY REQUEST ---
+    # ----------- INSIGHT PROMPT (no query) -----------
     if not query:
         prompt = f"""
-You are a smart finance dashboard assistant.
+You are an advanced finance insight assistant for a personal expense tracker app.
 
-Analyze the user's transactions (as JSON) for the selected period: {period}.
+INPUTS:
+- "transactions": all user transactions for all time, as a JSON array
+- "period": the current month in yyyyMM format
+- "budget": budget for the current month (if 0, ignore)
+- "days_left": days left in the month
 
-Return ONE JSON object, with a single key "dashboard_summary" having the following fields and grouping:
+TASK:
+1. Use transactions and period to analyze user’s current month, compare to previous month (if available).
+2. ALWAYS compute all amounts, entry counts, and categories DIRECTLY from transaction data.
+3. Output only JSON with a single key: "insight_groups" (see structure below). No commentary or extra fields.
 
-- "period_label": e.g. "This Month (Jun 25)"
-- "month_comparison": {{"label": "Last month vs this month", "text": "Expense up by xx% compared to previous month"}}
-- "top_high_spend": {{"label": "Top 3 High Spend", "categories": [ {{"category": "...", "amount": ..., "text": "..."}}, ... ]}}
-- "anomaly_detected": {{"label": "Top Anomaly Detected", "anomalies": [ {{"category": "...", "amount": ..., "text": "..."}}, ... ]}}
-- "forecast": {{"label": "This Month Forecast", "text": "..."}}
-- "savings_tip": {{"label": "Saving Tip", "text": "..."}}
-- "upcoming_bills": {{"label": "Upcoming Bills / Recurring Transactions", "bills": [ {{"category": "...", "amount": ..., "text": "..."}}, ... ]}}
+**insight_groups** must include (as relevant):
+- A top-level summary or headline (type "Summary" or "Spending Behavior"), with custom insight. Example: "Groceries account for 28% of your spend this month." or "Weekend spending is double weekdays."
+- Income vs Expense
+- Expense Comparison
+- High Spend: Top 3 categories for this month, as "High Spend: [Category] (₹[amount], [entry count] entries)..."
+- Detected anomalies: “Unusual spend detected: ₹xxxx at [category] (₹[amount], [entry count] entries)...”
+- Saving Tip: Based on highest category, suggest 25% savings (amount & entries shown)
+- Payment Method: Top 2 payment methods; if "card" is highest, issue alert about interest.
+- Recurring Bill: List all this month’s recurring bills (isRecurring==true)
+- Forecast: Project month-end spend (show if above/below budget)
+- Savings Trend: Savings up/down compared to last month
+- Cash Flow: Income/expense ratio
+- Any other notable trends (see below).
 
-Fill only if data is relevant, else leave as an empty list/empty string.
+**Optional smart trends/alerts**:
+- Categories with highest change vs last month (increase/decrease %)
+- Average daily spending (and if up/down)
+- Budget left for key categories
+- Notable subscriptions or upcoming bills (with days due)
+- AI Smart Suggestion: “Consider a monthly pass for coffee shops — 12 visits this month.”
 
-User's transactions:
-{json.dumps(tx_list)}
-
-Budget for this month: {budget}
-Days left in month: {days_left}
-"""
-
-    # --- INSIGHT/CHAT REQUEST ---
-    else:
-        prompt = f"""
-You are a smart finance assistant for insights and chat.
-
-Analyze the user's transactions (as JSON) for the selected period: {period}.
-
-If the user query is present ("{query}"):
-1. Find the answer to the query and reply in a header (1 line).
-2. Provide up to 10 matching transactions (full JSON details, not just indices).
-3. For insights, return a list "insight_groups": each group has:
-    - "header": short summary, e.g. "High spend in Food"
-    - "detail": short explanation, e.g. "₹4800 spent, 20% higher than last month"
-    - "type": one of: "highSpendCategory", "anomalyDetection", "forecast", "savingsTip", "upcomingBill"
-    - "category": category if applicable, else empty
-    - "transactions": array of matching transactions (full JSON)
-
-The response JSON format MUST be:
-
+**Format each group:**
 {{
-  "chat": {{
-    "header": "...answer to user query...",
-    "entries": [ ... up to 10 full transaction objects ... ]
-  }},
-  "insight_groups": [
-    {{
-      "header": "...",
-      "detail": "...",
-      "type": "...",
-      "category": "...",
-      "transactions": [ ... matching transactions ... ]
-    }},
-    ...
-  ]
+  "header": "...summary or insight...",
+  "detail": "...full explanation (always include category, amount, entry count as applicable)...",
+  "type": "...must be one of: Summary, Spending Behavior, Income vs Expense, Expense Comparison, High Spend, Saving Tip, Payment Method, Recurring Bill, Forecast, Savings Trend, Cash Flow, Anomaly, Smart Suggestion...",
+  "category": "...category name if relevant...",
+  "transactions": [ ...relevant transactions as JSON... ]
 }}
 
-Do not include explanations outside the JSON. All outputs must be inside the response JSON.
+**Output ONLY this JSON (no explanations or commentary):**
+{{
+  "insight_groups": [ ... ]
+}}
 
-User query: "{query}"
+Use only actual data. Do not hallucinate or invent values.
 
-User's transactions:
-{json.dumps(tx_list)}
+Input data:
+transactions: {json.dumps(tx_list)}
+budget: {budget}
+days_left: {days_left}
+period: {period}
+"""
+    # ----------- CHAT PROMPT (with query) -----------
+    else:
+        prompt = f"""
+You are an advanced finance chat assistant for a personal expense tracker app.
 
-Budget for this month: {budget}
-Days left in month: {days_left}
+INPUTS:
+- "transactions": all user transactions for all time, as JSON array
+- "period": the current month in yyyyMM format
+- "budget": budget for the current month (if 0, ignore)
+- "days_left": days left in the month
+- "query": user's chat question
+
+TASK:
+- If the query asks about a specific category, amount, time period, trend, summary, or comparison, reply with a human-friendly, data-driven answer.
+- Always base your answer on transaction data for the specified period/category. 
+- Never invent values. Compute all values (amounts, counts, dates, etc) directly from the input transactions.
+- For every query, output **only** the JSON format below.
+
+**Output format:**
+{{
+  "chat": {{
+    "header": "...summary answer (always include category, amount, entry count, and period info if relevant)...",
+    "entries": [ ...up to 10 matching transactions as JSON... ]
+  }},
+  "insight_groups": [ ...as above, for additional relevant insights... ]
+}}
+
+**Example Queries and Responses:**
+- Q: How much did I spend on food this month?
+  A: Food: ₹4,350 (12 entries this month)
+
+- Q: How much groceries in June?
+  A: Groceries: ₹2,800 (6 entries in 202406)
+
+- Q: Total expenses last month?
+  A: Total expenses in June: ₹24,000 (65 entries)
+
+- Q: My top category this month?
+  A: Top category: Food (₹4,350, 12 entries)
+
+- Q: What are my recurring bills?
+  A: 3 recurring bills this month: Internet (₹1,000), Mobile (₹400), Netflix (₹999)
+
+- Q: What is my average daily spend?
+  A: Average daily spend this month: ₹700
+
+- Q: Card spend vs UPI spend?
+  A: Card: ₹2,000 (5 entries), UPI: ₹4,100 (13 entries)
+
+- Q: Am I overspending compared to last month?
+  A: Yes, your total expenses increased by 18% compared to last month.
+
+- Q: Unusual spend?
+  A: Unusual spend detected: ₹3,200 at Electronics Store (4x usual, 2 entries this month)
+
+- Q: Upcoming subscription?
+  A: Netflix subscription due in 3 days (₹999)
+
+- Q: Forecast this month?
+  A: Projected month-end spend: ₹15,400 (₹1,900 over your budget)
+
+- Q: Savings trend?
+  A: Savings improved by ₹1,200 compared to last month.
+
+- Q: Income vs expense?
+  A: Income: ₹40,000, Expenses: ₹31,700, Savings: ₹8,300
+
+- Q: What if I ask something not in the data?
+  A: Respond politely: "No data found for your request."
+
+**INSTRUCTION:**
+- Always reply with the correct JSON structure, no commentary.
+- Your "header" in "chat" should sound natural, just like the examples above, and include category, amount, entry count, and period info where appropriate.
+
+Input data:
+transactions: {json.dumps(tx_list)}
+budget: {budget}
+days_left: {days_left}
+period: {period}
+query: "{query}"
 """
 
-    # ----- CALL OPENAI -----
     try:
         chat_completion = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -105,7 +162,6 @@ Days left in month: {days_left}
         print("OpenAI error:", e)
         return jsonify({"error": str(e)})
 
-    # Clean markdown blocks like ```json ... ```
     try:
         if response_text.startswith("```json"):
             response_text = response_text.removeprefix("```json").removesuffix("```").strip()
@@ -114,14 +170,9 @@ Days left in month: {days_left}
         resp_json = json.loads(response_text)
     except Exception as e:
         print("Error parsing GPT response as JSON:", e)
-        # Fallback: return as string for debugging
         return jsonify({
             "parse_error": str(e),
             "raw_response": response_text
         })
 
     return jsonify(resp_json)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
