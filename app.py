@@ -13,20 +13,25 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 def extract_period(date_value):
     """
-    Extract YYYYMM period from Firestore 'Date' field.
     Handles:
-      - Unix timestamp (ms)
-      - String like 'March 10, 2025 at 8:19:00 PM UTC+5:30'
-    Always uses IST for period calculation.
+      - Timestamp in seconds (int, <2e10)
+      - Timestamp in ms (int, >2e10)
+      - Firestore string (e.g., 'March 10, 2025 at 8:19:00 PM UTC+5:30')
+    Returns YYYYMM as string in IST.
     """
-    # Case 1: Milliseconds timestamp
+    # Numeric: seconds or ms
     if isinstance(date_value, (int, float)):
         try:
-            dt = datetime.fromtimestamp(date_value / 1000, IST)
+            # Detect ms or seconds (before year 2400)
+            dt = None
+            if date_value > 2e10:
+                dt = datetime.fromtimestamp(date_value / 1000, IST)  # ms
+            else:
+                dt = datetime.fromtimestamp(date_value, IST)  # seconds
             return dt.strftime("%Y%m")
         except Exception:
             pass
-    # Case 2: Firestore string
+    # Firestore string
     try:
         main_part = str(date_value).split(' UTC')[0].strip()
         dt = datetime.strptime(main_part, "%B %d, %Y at %I:%M:%S %p")
@@ -35,7 +40,6 @@ def extract_period(date_value):
     except Exception:
         pass
     return None
-
 def get_prev_period(period_str):
     try:
         dt = datetime.strptime(period_str, "%Y%m")
