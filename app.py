@@ -1,3 +1,7 @@
+from flask import Flask
+
+app = Flask(__name__)
+
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
     data = request.get_json()
