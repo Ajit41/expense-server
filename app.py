@@ -23,19 +23,19 @@ def get_prev_period(period_str):
         return None
 
 @app.route('/ai-insight', methods=['POST'])
+@app.route('/ai-insight', methods=['POST'])
 def ai_insight():
-    data        = request.get_json()
-    tx_list     = data.get("transactions", [])
-    period      = data.get("period", "")
+    data      = request.get_json()
+    tx_list   = data.get("transactions", [])
+    period    = data.get("period", "")
     prev_period = get_prev_period(period)
-    query       = data.get("query", "")
-    budget      = data.get("budget", 0)
-    days_left   = data.get("days_left", 0)
+    query     = data.get("query", "")
+    budget    = data.get("budget", 0)
+    days_left = data.get("days_left", 0)
 
-    # Filter only required periods
+    # Only keep current and previous month transactions
     allowed_periods = {period, prev_period}
     filtered_tx = [tx for tx in tx_list if tx.get("Period") in allowed_periods]
-
     if not query:
         prompt = f"""
 You are an advanced finance insight assistant for a personal expense tracker app.
