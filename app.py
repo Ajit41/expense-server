@@ -1,71 +1,78 @@
-from flask import Flask, request, jsonify
+# app.py
+
 import os
 import json
-from openai import OpenAI
 from datetime import datetime, timezone, timedelta
+from flask import Flask, request, jsonify
+from openai import OpenAI
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
+# India Standard Time (UTC+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
+
 
 def extract_period(date_value):
     """
-    Handles:
-      - Timestamp in seconds (int, <2e10)
-      - Timestamp in ms (int, >2e10)
-      - Firestore string (e.g., 'March 10, 2025 at 8:19:00 PM UTC+5:30')
-    Returns YYYYMM as string in IST.
+    Convert:
+      - ISO-8601 strings (with offset)
+      - Numeric ms-since-epoch
+    into a YYYYMM string in IST.
     """
-    # Numeric: seconds or ms
-    if isinstance(date_value, (int, float)):
+    # ISO-8601 string
+    if isinstance(date_value, str):
         try:
-            dt = None
-            if date_value > 2e10:
-                dt = datetime.fromtimestamp(date_value / 1000, IST)  # ms
-            else:
-                dt = datetime.fromtimestamp(date_value, IST)  # seconds
+            dt = datetime.fromisoformat(date_value)
+            dt = dt.astimezone(IST)
             return dt.strftime("%Y%m")
         except Exception:
             pass
-    # Firestore string
-    try:
-        main_part = str(date_value).split(' UTC')[0].strip()
-        dt = datetime.strptime(main_part, "%B %d, %Y at %I:%M:%S %p")
-        dt = dt.replace(tzinfo=IST)
-        return dt.strftime("%Y%m")
-    except Exception:
-        pass
+
+    # Numeric: ms since epoch
+    if isinstance(date_value, (int, float)):
+        try:
+            dt = datetime.fromtimestamp(date_value / 1000, IST)
+            return dt.strftime("%Y%m")
+        except Exception:
+            pass
+
     return None
 
+
 def get_prev_period(period_str):
+    """
+    Given "YYYYMM", return the previous month as "YYYYMM".
+    """
     try:
         dt = datetime.strptime(period_str, "%Y%m")
-        if dt.month == 1:
-            prev_dt = dt.replace(year=dt.year-1, month=12)
-        else:
-            prev_dt = dt.replace(month=dt.month-1)
-        return prev_dt.strftime("%Y%m")
+        year, month = dt.year, dt.month - 1
+        if month == 0:
+            year -= 1
+            month = 12
+        prev = datetime(year, month, 1)
+        return prev.strftime("%Y%m")
     except Exception:
         return None
 
+
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
-    data = request.get_json()
-    tx_list = data.get("transactions", [])
-    period = data.get("period", "")
-    query = data.get("query", "")
-    budget = data.get("budget", 0)
+    data      = request.get_json()
+    model     = data.get("model", "gpt-4o")
+    tx_list   = data.get("transactions", [])
+    period    = data.get("period", "")
+    prev_period = get_prev_period(period)
+    query     = data.get("query", "")
+    budget    = data.get("budget", 0)
     days_left = data.get("days_left", 0)
 
-    # Annotate each transaction with a computed 'Period' field (upper case)
+    # 1. Annotate each transaction with a computed 'Period' field
     for tx in tx_list:
-        date_str = tx.get("Date", "") or tx.get("date", "")
-        period_val = extract_period(date_str)
-        tx["Period"] = period_val
+        raw = tx.get("Date", tx.get("date", None))
+        tx["Period"] = extract_period(raw)
 
-    prev_period = get_prev_period(period)
-
+    # 2. Build prompt depending on whether this is an insight-task or chat-query
     if not query:
         prompt = f"""
 You are an advanced finance insight assistant for a personal expense tracker app.
@@ -75,7 +82,7 @@ Use ONLY transactions where "Period" matches "{period}" for all main insights.
 For "total expense", sum ONLY transactions where "Type" equals 0 and "Period" is "{period}". Use "Amount" for sums and "Category" for grouping.
 For "total income", sum ONLY transactions where "Type" equals 1 and "Period" is "{period}".
 For previous month comparisons, use ONLY transactions with "Period" = "{prev_period}".
-For Recurring Bill: include ONLY transactions where "IsRecurring" is true and "Period" is "{period}".
+For Recurring Bill: include ONLY transactions where "IsRecurring" is true and "Period" = "{period}".
 Always use these field names and capitalization: "Amount", "Category", "Date", "Created", "Datatype", "IsRecurring", "Method", "Note", "RecurringMode", "Reference", "Remarks1", "Transaction", "Type", "Period".
 Never use or reference data from any other period.
 Never guess or estimate—use only provided transaction data.
@@ -143,13 +150,12 @@ insight_groups must include (as relevant):
 - Longest Expense Streak: “5 consecutive days with no spend" or "12-day streak of Food expenses.”
 - AI Smart Suggestion: “Consider a monthly pass for coffee shops — 12 visits this month.”
 - At least 5 unique, data-matching Smart Suggestions
-- Any other notable trends if found
+- You may invent new other notable trends if found
 
 Format each group:
 {{"header":"...","detail":"...","type":"...","category":"...","transactions":[...]}}
 Output ONLY this JSON (no explanations or commentary):
 {{"insight_groups":[...]}}
-
 Input data:
 transactions: {json.dumps(tx_list)}
 period: {period}
@@ -180,7 +186,7 @@ TASK:
 For each chat answer, write a detailed, user-friendly message as if you are speaking directly to the user—be positive, conversational, and concise.
 If the query asks about a specific category, amount, time period, trend, summary, or comparison, reply with a human-friendly, data-driven answer using only the correct period(s).
 Output format:
-{{"chat": {{"header": "...", "entries": [ ...transactions... ]}}, "insight_groups": [ ... ]}}
+{{"chat": {{"header": "...", "entries": [...]}}, "insight_groups": [...]}}
 
 Input data:
 transactions: {json.dumps(tx_list)}
@@ -190,35 +196,38 @@ budget: {budget}
 days_left: {days_left}
 query: "{query}"
 """
+
+    # 3. Call ChatGPT
     try:
         chat_completion = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You are a smart finance assistant."},
-                {"role": "user", "content": prompt}
+                {"role": "user",   "content": prompt}
             ],
             temperature=0.65
         )
         response_text = chat_completion.choices[0].message.content
     except Exception as e:
-        print("OpenAI error:", e)
-        return jsonify({"error": str(e)})
+        return jsonify({"error": str(e)}), 500
+
+    # 4. Strip code fences and parse JSON
+    if response_text.startswith("```json"):
+        response_text = response_text.removeprefix("```json").removesuffix("```").strip()
+    elif response_text.startswith("```"):
+        response_text = response_text.removeprefix("```").removesuffix("```").strip()
 
     try:
-        if response_text.startswith("```json"):
-            response_text = response_text.removeprefix("```json").removesuffix("```").strip()
-        elif response_text.startswith("```"):
-            response_text = response_text.removeprefix("```").removesuffix("```").strip()
         resp_json = json.loads(response_text)
     except Exception as e:
-        print("Error parsing GPT response as JSON:", e)
         return jsonify({
             "parse_error": str(e),
             "raw_response": response_text
-        })
+        }), 500
 
     return jsonify(resp_json)
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=True)
