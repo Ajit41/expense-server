@@ -1,54 +1,9 @@
-import os
-import json
-from datetime import datetime
-from flask import Flask, request, jsonify
-from openai import OpenAI
-from collections import defaultdict
-
-app = Flask(__name__)
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
-def get_prev_period(period_str):
-    try:
-        dt = datetime.strptime(period_str, "%Y%m")
-        year, month = dt.year, dt.month - 1
-        if month == 0:
-            year -= 1
-            month = 12
-        return f"{year:04d}{month:02d}"
-    except Exception:
-        return ""
-
-def group_by_category(transactions, period, type_val):
-    summary = defaultdict(lambda: {'Amount': 0, 'Count': 0})
-    for tx in transactions:
-        if tx.get("Period") == period and tx.get("Type") == type_val:
-            cat = tx.get("Category", "Unknown")
-            summary[cat]['Amount'] += float(tx.get("Amount", 0))
-            summary[cat]['Count'] += 1
-    return [
-        {"Category": cat, "Amount": round(v['Amount'], 2), "Count": v['Count']}
-        for cat, v in summary.items()
-    ]
-
-def group_by_merchant(transactions, period, category):
-    summary = defaultdict(lambda: {'Amount': 0, 'Count': 0})
-    for tx in transactions:
-        if tx.get("Period") == period and tx.get("Category") == category:
-            merchant = tx.get("Transaction", "Unknown")
-            summary[merchant]['Amount'] += float(tx.get("Amount", 0))
-            summary[merchant]['Count'] += 1
-    return [
-        {"Merchant": m, "Amount": round(v['Amount'], 2), "Count": v['Count']}
-        for m, v in summary.items()
-    ]
-
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
     data        = request.get_json()
     tx_list     = data.get("transactions", [])
     period      = data.get("period", "")
-    merchant_category = data.get("merchant_category")  # now user can pass any category name
+    merchant_category = data.get("merchant_category")
     if not period:
         return jsonify({"error": "Missing required field: period"}), 400
 
@@ -56,6 +11,7 @@ def ai_insight():
     query       = data.get("query", "")
     budget      = data.get("budget", 0)
     days_left   = data.get("days_left", 0)
+    current_month_str = datetime.now().strftime("%Y%m")   # <-- Ensure this is set
 
     allowed_periods = {period, prev_period}
     filtered_tx = [tx for tx in tx_list if tx.get("Period") in allowed_periods]
@@ -72,47 +28,67 @@ def ai_insight():
             }]
         }), 200
 
-    # Summaries for current period only
     expense_summary = group_by_category(filtered_tx, period, 0)
     income_summary  = group_by_category(filtered_tx, period, 1)
     merchant_summary = []
     if merchant_category:
         merchant_summary = group_by_merchant(filtered_tx, period, merchant_category)
+    payment_summary = group_by_payment(filtered_tx, period)   # <-- was mis-indented
 
-    # Compose prompt for GPT
     if not query:
         prompt = f"""
 You are a finance insight assistant for a personal expense tracker.
 
-- Use ONLY the provided summaries below for all your category-level analysis.
-- Do NOT analyze individual transactions for category totals—use the pre-calculated summaries.
-- For Merchant-Insights, use the merchant_summary for the requested category if available.
-- For any other merchant-level insights, ask for a summary.
+- Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs", or any other currency symbol.
+- Never recalculate totals or counts from raw transactions. Use ONLY the provided summaries below for your analysis.
+- For Payment Method, use payment_summary. For Merchant-Insights, use merchant_summary for the specified category.
+- For every section, smart suggestion, notable trend, alert, or data point (including “small writing” and optional/creative insights):
+    - You MUST always use this format for every value:  
+      “₹{amt} at {category} ({count} entries)”  
+      or  
+      “₹{amt} in {category} ({count} entries)”
+    - Use “entries” (plural) unless count == 1.
+    - **No section, suggestion, trend, or alert is valid without this format.**
+- This rule applies to Spend Timing Insights, Expense Density Map, Transaction Frequency, Zero-activity Categories, Missed Bills, Longest Expense Streak, ALL Smart Suggestions, and any optional or invented trends or alerts.
+- For Card usage (where Method or Category is “Cards”), always include: “₹{amt} at Cards ({count} entries)” and suggest avoiding card interest via UPI/cash (this can be included in small writing).
+- For Smart Suggestions and Other Notable Trends, you may invent new suggestions or trends if you discover other interesting, actionable patterns in the user's data.
+- All insights and suggestions must be positive, user-friendly, and suggest helpful next steps or actions for the user. Never use negative or discouraging language—always encourage, empower, and guide the user toward better financial choices.
+- Never repeat or duplicate insights in this period.
 
+
+- **Section logic:**
+  - Only show Forecast, Savings Trend, Saving Tip if period == current month ({current_month_str}).
+  - High Spend must always use the required format.
+  - Merchant-Insights must use merchant_summary if present.
+  - Remaining Budget must always state budget left in rupees and how much spent.
+  - Category Comparison must compare with previous period (if available) and mention categories and counts in format.
+  - All sections and suggestions must always state data in the specified format (no exceptions).
+
+Data available to you:
 category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
 income_summary: {json.dumps(income_summary, separators=(',', ':'))}
+payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
 merchant_summary: {json.dumps(merchant_summary, separators=(',', ':'))}
 period: {period}
 prev_period: {prev_period}
 budget: {budget}
 days_left: {days_left}
+current_month: {current_month_str}
 
-Required insight_groups:
+Required insight_groups (include only if relevant data is available):
 - Summary (Spending Behavior)
 - Income vs Expense
-- High Spend (Top 3 categories by amount)
 - Expense Comparison (Only if both periods have matching data)
-- Remaining Budget (if budget > 0)
-- Payment Method
-- Recurring Bill
-- Forecast
-- Saving Tip
-- Savings Trend
 - Cash Flow
-- Longest Expense Streak
+- High Spend (Top 3 categories by amount)
+- Category Comparison with previous period
 - Merchant-Insights (for the specified category, use merchant_summary)
-- At least 2 Smart Suggestions (each with category, amount, and count)
-- Other Notable Trends (optional)
+- At least 4-5 Smart Suggestions (each with category, amount, and count)
+- 2-3 Optional trends/alerts (optional, as described above)
+- Saving Tip (if current month = period)
+- Savings Trend (if current month = period)
+- Remaining Budget
+- Forecast (if current month = period)
 
 Respond in this JSON format:
 {{
@@ -125,23 +101,25 @@ Respond in this JSON format:
     else:
         prompt = f"""
 You are a smart financial chat assistant.
-Use ONLY the provided category/income/merchant summaries for your analysis.
+Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs" or any other currency symbol.
+Use ONLY the provided category/income/merchant/payment summaries for your analysis.
 Never guess or make assumptions. If no matching data exists: return “No data for this period.”
 
 category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
 income_summary: {json.dumps(income_summary, separators=(',', ':'))}
+payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
 merchant_summary: {json.dumps(merchant_summary, separators=(',', ':'))}
 period: {period}
 prev_period: {prev_period}
 budget: {budget}
 days_left: {days_left}
+current_month: {current_month_str}
 query: "{query}"
 
 Output format:
 {{"chat": {{"header": "...", "entries": [...] }}, "insight_groups": [...]}}
 
 """
-
     try:
         chat_completion = client.chat.completions.create(
             model="gpt-4o",
