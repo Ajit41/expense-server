@@ -2,12 +2,10 @@ from flask import Flask, request, jsonify
 import os
 import json
 from openai import OpenAI
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
-from datetime import datetime, timezone, timedelta
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -22,7 +20,6 @@ def extract_period(date_value):
     # Numeric: seconds or ms
     if isinstance(date_value, (int, float)):
         try:
-            # Detect ms or seconds (before year 2400)
             dt = None
             if date_value > 2e10:
                 dt = datetime.fromtimestamp(date_value / 1000, IST)  # ms
@@ -40,6 +37,7 @@ def extract_period(date_value):
     except Exception:
         pass
     return None
+
 def get_prev_period(period_str):
     try:
         dt = datetime.strptime(period_str, "%Y%m")
@@ -81,7 +79,7 @@ For Recurring Bill: include ONLY transactions where "IsRecurring" is true and "P
 Always use these field names and capitalization: "Amount", "Category", "Date", "Created", "Datatype", "IsRecurring", "Method", "Note", "RecurringMode", "Reference", "Remarks1", "Transaction", "Type", "Period".
 Never use or reference data from any other period.
 Never guess or estimate—use only provided transaction data.
-If there are no matching transactions for the period or previous month, state this clearly in the insight.
+If there are no matching transactions for a category, period, or type, state clearly: "No data for this period" for that group.
 All date matching must be exact.
 
 INPUTS:
@@ -94,12 +92,16 @@ INPUTS:
 TASK:
 1. Analyze only the transactions where "Period"="{period}". For previous month, use only "Period"="{prev_period}".
 2. For every insight in "insight_groups" (except "Forecast", "Savings Trend", and "Cash Flow"), every "Smart Suggestion", and every "Other Notable Trend", you must embed this format in the message: "₹{{amt}} at {{category}} ({{count}} entries)" or "₹{{amt}} in {{category}} ({{count}} entries)". If a suggestion or trend applies to multiple categories, include amounts and counts for each category in the same format. Never skip this for Smart Suggestions or Other Notable Trends—these sections are only valid if they include amount, category, and count in the exact required format. Write a detailed, user-friendly message as if you are speaking directly to the user—be positive, conversational, and concise. Never leave out the amount, category, and entry count from any applicable message. If only one entry, use "entry"; if more than one, use "entries".
-3. For Smart Suggestions: Never suggest actions in general (like "Consider meal prepping") without tying it to the actual amount and category, e.g.: "You've spent ₹1200 at Food (8 entries) this month—try meal prepping to save more."
-4. For Card Usage: Always include the actual data in the message, for example: "₹{{amt}} at Cards ({{count}} entries)" or "₹{{amt}} at Credit Card ({{count}} entries)" if relevant, and explain if high usage could lead to interest, with encouragement for UPI/cash for better control.
-5. For Other Notable Trends: Always tie to specific categories and data, e.g.: "₹{{amt}} at Shopping ({{count}} entries) is 25% higher than last month. Set a 10% cut target next month."
-6. For each insight or chat answer, use encouraging language for positive trends and give actionable, plain English suggestions.
-7. Always include at least 5 unique Smart Suggestions, each with category, amount, and entry count.
-8. Optional smart trends/alerts:
+3. **Expense Comparison**: If no data exists for the previous month or category, state clearly "No data for this period". Do not compare if no previous data exists for the category. Do not repeat categories already present in High Spend or Smart Suggestions.
+4. **High Spend**: Always show the top 3 unique categories by amount, each only once, and do not repeat categories already listed in Smart Suggestions or elsewhere.
+5. **Smart Suggestions**: Each suggestion must use a unique category/amount/count not already used in High Spend, Expense Comparison, or other suggestions.
+6. Never show duplicate suggestions or category/amount combos in any "insight_group" (even in Smart Suggestions).
+7. For Smart Suggestions: Never suggest actions in general (like "Consider meal prepping") without tying it to the actual amount and category, e.g.: "You've spent ₹1200 at Food (8 entries) this month—try meal prepping to save more."
+8. For Card Usage: Always include the actual data in the message, for example: "₹{{amt}} at Cards ({{count}} entries)" or "₹{{amt}} at Credit Card ({{count}} entries)" if relevant, and explain if high usage could lead to interest, with encouragement for UPI/cash for better control.
+9. For Other Notable Trends: Always tie to specific categories and data, e.g.: "₹{{amt}} at Shopping ({{count}} entries) is 25% higher than last month. Set a 10% cut target next month."
+10. For each insight or chat answer, use encouraging language for positive trends and give actionable, plain English suggestions.
+11. Always include at least 5 unique Smart Suggestions, each with category, amount, and entry count, and no duplicates from other groups.
+12. Optional smart trends/alerts:
    Spend Timing Insights: “80% of your monthly spending happens in the first 10 days—₹{{amt}} at {{category}} ({{count}} entries) in that time.”
    Expense Density Map: “75% of your spending is focused in just 3 categories: Food, Fuel, and Shopping—₹{{amt1}} at {{cat1}} ({{count1}}), ₹{{amt2}} at {{cat2}} ({{count2}}), ₹{{amt3}} at {{cat3}} ({{count3}}).”
    Transaction Frequency Insight: “You made 92 transactions this month—₹{{amt}} across {{category}} ({{count}} entries).”
@@ -113,7 +115,7 @@ TASK:
    Longest Expense Streak: “5 consecutive days with no spend" or "12-day streak of Food expenses.”
    AI Smart Suggestion: “Consider a monthly pass for coffee shops — 12 visits this month.”
    You may invent notable trends if you find other interesting, actionable patterns in the user's data. Never repeat the same in this period.
-9. Example Smart Suggestions (all must include data and counts in the required format!):
+13. Example Smart Suggestions (all must include data and counts in the required format!):
    "You've made ₹3,200 at Food Delivery (12 entries)—try limiting online orders to weekends for savings."
    "₹2,400 at Subscription Services (4 entries)—review your subscriptions for unused services."
    "₹1,800 at Cab/Auto (9 entries)—consider public transport to reduce travel costs."
@@ -140,7 +142,7 @@ insight_groups must include (as relevant):
 - Cash Flow
 - Longest Expense Streak: “5 consecutive days with no spend" or "12-day streak of Food expenses.”
 - AI Smart Suggestion: “Consider a monthly pass for coffee shops — 12 visits this month.”
-- At least 3 unique, data-matching Smart Suggestions
+- At least 5 unique, data-matching Smart Suggestions
 - Any other notable trends if found
 
 Format each group:
