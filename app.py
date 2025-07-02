@@ -9,9 +9,9 @@ from openai import OpenAI
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
+
 # India Standard Time (UTC+5:30)
 IST = timezone(timedelta(hours=5, minutes=30))
-
 
 def extract_period(date_value):
     """
@@ -20,7 +20,6 @@ def extract_period(date_value):
       - Numeric ms-since-epoch
     into a YYYYMM string in IST.
     """
-    # ISO-8601 string
     if isinstance(date_value, str):
         try:
             dt = datetime.fromisoformat(date_value)
@@ -28,22 +27,15 @@ def extract_period(date_value):
             return dt.strftime("%Y%m")
         except Exception:
             pass
-
-    # Numeric: ms since epoch
     if isinstance(date_value, (int, float)):
         try:
             dt = datetime.fromtimestamp(date_value / 1000, IST)
             return dt.strftime("%Y%m")
         except Exception:
             pass
-
     return None
 
-
 def get_prev_period(period_str):
-    """
-    Given "YYYYMM", return the previous month as "YYYYMM".
-    """
     try:
         dt = datetime.strptime(period_str, "%Y%m")
         year, month = dt.year, dt.month - 1
@@ -55,11 +47,10 @@ def get_prev_period(period_str):
     except Exception:
         return None
 
-
 @app.route('/ai-insight', methods=['POST'])
+
 def ai_insight():
     data      = request.get_json()
-    model     = data.get("model", "gpt-4o")
     tx_list   = data.get("transactions", [])
     period    = data.get("period", "")
     prev_period = get_prev_period(period)
@@ -67,10 +58,15 @@ def ai_insight():
     budget    = data.get("budget", 0)
     days_left = data.get("days_left", 0)
 
-    # 1. Annotate each transaction with a computed 'Period' field
+    # Annotate each transaction with a computed 'Period' field if missing
     for tx in tx_list:
-        raw = tx.get("Date", tx.get("date", None))
-        tx["Period"] = extract_period(raw)
+        if "Period" not in tx or not tx["Period"]:
+            raw = tx.get("Date", tx.get("date", None))
+            tx["Period"] = extract_period(raw)
+
+    # FILTER: Only keep transactions from the selected period or previous period
+    allowed_periods = {period, prev_period}
+    filtered_tx = [tx for tx in tx_list if tx.get("Period") in allowed_periods]
 
     # 2. Build prompt depending on whether this is an insight-task or chat-query
     if not query:
@@ -112,7 +108,6 @@ TASK:
    Spend Timing Insights: “80% of your monthly spending happens in the first 10 days—₹{{amt}} at {{category}} ({{count}} entries) in that time.”
    Expense Density Map: “75% of your spending is focused in just 3 categories: Food, Fuel, and Shopping—₹{{amt1}} at {{cat1}} ({{count1}}), ₹{{amt2}} at {{cat2}} ({{count2}}), ₹{{amt3}} at {{cat3}} ({{count3}}).”
    Transaction Frequency Insight: “You made 92 transactions this month—₹{{amt}} across {{category}} ({{count}} entries).”
-   Merchant-Insights: “You placed 7 orders from Amazon this month (₹5,800 total).”
    Average daily spending (and if up/down)
    Budget left for key categories
    Cash Burn Rate: “Daily rate vs total balance”
@@ -121,7 +116,7 @@ TASK:
    Missed Bills Alert: “Recurring items not seen this month but seen in past”
    Longest Expense Streak: “5 consecutive days with no spend" or "12-day streak of Food expenses.”
    AI Smart Suggestion: “Consider a monthly pass for coffee shops — 12 visits this month.”
-   You may invent notable trends if you find other interesting, actionable patterns in the user's data. Never repeat the same in this period.
+   You may invent new notable trends if you find other interesting, actionable patterns in the user's data. Never repeat the same in this period.
 13. Example Smart Suggestions (all must include data and counts in the required format!):
    "You've made ₹3,200 at Food Delivery (12 entries)—try limiting online orders to weekends for savings."
    "₹2,400 at Subscription Services (4 entries)—review your subscriptions for unused services."
@@ -148,8 +143,7 @@ insight_groups must include (as relevant):
 - Savings Trend
 - Cash Flow
 - Longest Expense Streak: “5 consecutive days with no spend" or "12-day streak of Food expenses.”
-- AI Smart Suggestion: “Consider a monthly pass for coffee shops — 12 visits this month.”
-- At least 5 unique, data-matching Smart Suggestions
+- At least 2 unique, data-matching Smart Suggestions
 - You may invent new other notable trends if found
 
 Format each group:
