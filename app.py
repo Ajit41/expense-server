@@ -1,14 +1,12 @@
 import os
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from flask import Flask, request, jsonify
 from openai import OpenAI
 
 app = Flask(__name__)
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-# India Standard Time (UTC+5:30)
-IST = timezone(timedelta(hours=5, minutes=30))
 
 def get_prev_period(period_str):
     try:
@@ -17,88 +15,89 @@ def get_prev_period(period_str):
         if month == 0:
             year -= 1
             month = 12
-        prev = datetime(year, month, 1)
-        return prev.strftime("%Y%m")
+        return f"{year:04d}{month:02d}"
     except Exception:
-        return None
+        return ""
 
-@app.route('/ai-insight', methods=['POST'])
+
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
-    data      = request.get_json()
-    tx_list   = data.get("transactions", [])
-    period    = data.get("period", "")
-    prev_period = get_prev_period(period)
-    query     = data.get("query", "")
-    budget    = data.get("budget", 0)
-    days_left = data.get("days_left", 0)
+    data        = request.get_json()
+    tx_list     = data.get("transactions", [])
+    period      = data.get("period", "")
+    if not period:
+        return jsonify({"error": "Missing required field: period"}), 400
 
-    # Only keep current and previous month transactions
+    prev_period = get_prev_period(period)
+    query       = data.get("query", "")
+    budget      = data.get("budget", 0)
+    days_left   = data.get("days_left", 0)
+
+    # ✅ Filter only current and previous period
     allowed_periods = {period, prev_period}
     filtered_tx = [tx for tx in tx_list if tx.get("Period") in allowed_periods]
+
+    # ✅ Limit to avoid token overflow
+    filtered_tx = filtered_tx[:1000]
+    tx_count = len(filtered_tx)
+
+    # ✅ Main prompt for insights
     if not query:
         prompt = f"""
 You are an advanced finance insight assistant for a personal expense tracker app.
 
-Strict Data Rules:
-1. Only analyze transactions where Period = \"{period}\" for this month, and Period = \"{prev_period}\" for last month. Ignore other data.
+Use ONLY transactions where Period = "{period}" for current month insights, and Period = "{prev_period}" for comparisons.
+For "total expense", sum ONLY transactions where "Type" equals 0 and "Period" is "{period}". Use "Amount" for sums and "Category" for grouping.
+For "total income", sum ONLY transactions where "Type" equals 1 and "Period" is "{period}".
+For previous month comparisons, use ONLY transactions with "Period" = "{prev_period}".
+For Recurring Bill: include ONLY transactions where "IsRecurring" is true and Period = "{period}".
 
-2. For all insight_groups (except Forecast, Savings Trend, and Cash Flow), and for every Smart Suggestion and Other Notable Trend, you MUST format values like:
-   - Format: “₹{{amt}} at {{category}} ({{count}} entries)” or “₹{{amt}} in {{category}} ({{count}} entries)”
-   - This is mandatory. No section is valid without this format. Always pluralize properly.
+⚠️ Important formatting rule (mandatory):
+- Format: “₹{{amt}} at {{category}} ({{count}} entries)” or “₹{{amt}} in {{category}} ({{count}} entries)”
+- This format is required. Never skip it. Use “entry” or “entries” based on count.
 
-3. Expense Comparison: Only compare if data exists in both periods. If missing, say “No data for this period”. Do not duplicate categories from High Spend or Smart Suggestions.
-4. High Spend: Show top 3 unique categories this month by amount. Avoid repeating these in suggestions or other sections.
-5. Card Usage: If cards are used, include data like “₹{{amt}} at Cards ({{count}} entries)”, and suggest avoiding interest via UPI/cash.
-6. Other Notable Trends: You may invent new Trends if you find other interesting, actionable patterns in the user's data. Example: “₹1,200 at Shopping (4 entries) is 25% higher than last month.” Never repeat the same in this period.
-7. You may invent new Smart Suggestions if you find other interesting, actionable patterns in the user's data, suggestions with category, amount, and count. Do not reuse categories from insight_groups. Never repeat the same in this period.
-8. All insights should be positive, user-friendly, and suggest helpful next steps. Never estimate or hallucinate. If no data, say clearly: “No data for this period.”
+Write all insights in a friendly tone. Never guess or estimate. If no data exists, say “No data for this period.”
 
-insight_groups must include (when data exists):
-- Summary (Spending Behavior)
+Output must include:
 - Income vs Expense
-- Expense Comparison
+- High Spend (top 3 categories)
+- Expense Comparison (only if both months have data)
 - Remaining Budget (if budget > 0)
-- High Spend
-- Detected anomalies (if any)
 - Payment Method
-- Recurring Bill (IsRecurring = true, Period = \"{period}\")
-- Forecast (show only current month = period)
-- Saving Tip
-- Savings Trend
+- Recurring Bill
+- Forecast
+- Savings Tip
 - Cash Flow
-- Longest Expense Streak
-- Merchant-Insights (e.g., Amazon, Flipkart)
-- At least 1 unique Smart Suggestions
-- Other Notable Trend if any
+- At least 2 Smart Suggestions (include category, amount, and count)
+- Other Notable Trends (optional)
 
-Format each group:
-{{"header":"...","detail":"...","type":"...","category":"...","transactions":[...]}}
-Output ONLY this JSON (no explanations or commentary):
-{{"insight_groups":[...]}}
+Output ONLY this JSON:
+{{"insight_groups":[...]}} 
 
-Input data:
-transactions: {json.dumps(filtered_tx)}
+Data received: {tx_count} transactions
+Input:
+transactions: {json.dumps(filtered_tx, separators=(',', ':'))}
 period: {period}
 prev_period: {prev_period}
 budget: {budget}
 days_left: {days_left}
 """
     else:
+        # Query-based chat
         prompt = f"""
 You are an advanced finance chat assistant for a personal expense tracker app.
 
-Strict Data Rules:
-Use ONLY transactions where "Period" matches "{period}" for main answers.
-For previous month comparisons, use ONLY transactions with "Period"="{prev_period}".
-Never guess or estimate.
-If no matching transactions, say: "No data for this period."
+Use ONLY transactions where Period = "{period}" for the current month.
+Use ONLY transactions where Period = "{prev_period}" for previous month comparisons.
+Never guess or estimate values. Always respond based only on the provided data.
+If no matching data exists, reply clearly: "No data for this period."
 
 Output format:
-{{"chat": {{"header": "...", "entries": [...]}}, "insight_groups": [...]}}
+{{"chat": {{"header": "...", "entries": [...] }}, "insight_groups": [...]}}
 
-Input data:
-transactions: {json.dumps(filtered_tx)}
+Data received: {tx_count} transactions
+Input:
+transactions: {json.dumps(filtered_tx, separators=(',', ':'))}
 period: {period}
 prev_period: {prev_period}
 budget: {budget}
@@ -111,7 +110,7 @@ query: "{query}"
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": "You are a smart finance assistant."},
-                {"role": "user",   "content": prompt}
+                {"role": "user", "content": prompt}
             ],
             temperature=0.65
         )
@@ -119,6 +118,7 @@ query: "{query}"
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+    # Strip code block wrapper if present
     if response_text.startswith("```json"):
         response_text = response_text.removeprefix("```json").removesuffix("```").strip()
     elif response_text.startswith("```"):
@@ -133,6 +133,7 @@ query: "{query}"
         }), 500
 
     return jsonify(resp_json)
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
