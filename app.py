@@ -35,6 +35,7 @@ def ai_insight():
         merchant_summary = group_by_merchant(filtered_tx, period, merchant_category)
     payment_summary = group_by_payment(filtered_tx, period)   # <-- was mis-indented
 
+      # ----- INSIGHT REQUEST -----
     if not query:
         prompt = f"""
 You are a finance insight assistant for a personal expense tracker.
@@ -44,17 +45,16 @@ You are a finance insight assistant for a personal expense tracker.
 - For Payment Method, use payment_summary. For Merchant-Insights, use merchant_summary for the specified category.
 - For every section, smart suggestion, notable trend, alert, or data point (including “small writing” and optional/creative insights):
     - You MUST always use this format for every value:  
-      “₹{amt} at {category} ({count} entries)”  
+      “₹{{amt}} at {{category}} ({{count}} entries)”  
       or  
-      “₹{amt} in {category} ({count} entries)”
+      “₹{{amt}} in {{category}} ({{count}} entries)”
     - Use “entries” (plural) unless count == 1.
     - **No section, suggestion, trend, or alert is valid without this format.**
 - This rule applies to Spend Timing Insights, Expense Density Map, Transaction Frequency, Zero-activity Categories, Missed Bills, Longest Expense Streak, ALL Smart Suggestions, and any optional or invented trends or alerts.
-- For Card usage (where Method or Category is “Cards”), always include: “₹{amt} at Cards ({count} entries)” and suggest avoiding card interest via UPI/cash (this can be included in small writing).
+- For Card usage (where Method or Category is “Cards”), always include: “₹{{amt}} at Cards ({{count}} entries)” and suggest avoiding card interest via UPI/cash (this can be included in small writing).
 - For Smart Suggestions and Other Notable Trends, you may invent new suggestions or trends if you discover other interesting, actionable patterns in the user's data.
 - All insights and suggestions must be positive, user-friendly, and suggest helpful next steps or actions for the user. Never use negative or discouraging language—always encourage, empower, and guide the user toward better financial choices.
 - Never repeat or duplicate insights in this period.
-
 
 - **Section logic:**
   - Only show Forecast, Savings Trend, Saving Tip if period == current month ({current_month_str}).
@@ -98,6 +98,7 @@ Respond in this JSON format:
   ]
 }}
 """
+    # ----- CHAT REQUEST -----
     else:
         prompt = f"""
 You are a smart financial chat assistant.
@@ -117,9 +118,9 @@ current_month: {current_month_str}
 query: "{query}"
 
 Output format:
-{{"chat": {{"header": "...", "entries": [...] }}, "insight_groups": [...]}}
-
+{{"chat": {{"header": "...", "entries": [...] }}}}
 """
+
     try:
         chat_completion = client.chat.completions.create(
             model="gpt-4o",
