@@ -1,3 +1,13 @@
+import os
+import json
+from flask import Flask, request, jsonify
+from openai import OpenAI
+
+app = Flask(__name__)
+
+# Load OpenAI API key
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
     data        = request.get_json()
