@@ -79,15 +79,17 @@ def group_by_payment(tx_list, period):
     out = [{"method": k, "amount": f"₹{v:.2f}"} for k, v in summary.items()]
     return out
 
-def generate_header_from_query(q):
+def generate_header_from_query(q, key_match=None):
+    """Make header from user's intent and matched keyword."""
     q_lower = q.lower()
-    # Example for Big Basket
-    if "big basket" in q_lower or "bigbasket" in q_lower:
-        if "how much" in q_lower or "total" in q_lower or "spent" in q_lower or "cost" in q_lower:
-            return "Big Basket Spend"
-        if "how many" in q_lower or "count" in q_lower or "order" in q_lower:
-            return "Big Basket Order Count"
-        return "Big Basket Query"
+    if key_match:
+        if any(word in q_lower for word in ["how much", "total", "spent", "cost"]):
+            return f"{key_match.strip().title()} Spend"
+        if any(word in q_lower for word in ["how many", "count", "order"]):
+            return f"{key_match.strip().title()} Order Count"
+        if any(word in q_lower for word in ["list", "show", "all", "details"]):
+            return f"{key_match.strip().title()} Details"
+        return f"{key_match.strip().title()} Query"
     if "personal expense" in q_lower:
         return "Personal Expense"
     if "subscription" in q_lower:
@@ -98,8 +100,32 @@ def generate_header_from_query(q):
         return "Expense Summary"
     if "income" in q_lower:
         return "Income Overview"
-    # Default fallback
     return q.strip().capitalize()[:40] or "Chat Query"
+
+def add_smart_help_tip(chat_response, user_query):
+    """Appends a friendly tip based on query intent if not already a detailed breakdown."""
+    if not chat_response or "entries" not in chat_response:
+        return chat_response
+    q = user_query.lower()
+    help_tip = None
+
+    if any(kw in q for kw in ["payee", "person", "who", "to whom"]):
+        help_tip = "Tip: For transaction details, tap the payee in the Reports page for a full breakdown."
+    elif any(kw in q for kw in ["date wise", "by date", "datewise", "on which date", "all transactions", "each day"]):
+        help_tip = "Tip: For date-wise or date-related queries, tap the category or Payment in the Reports for a full breakdown."
+    elif any(kw in q for kw in ["category", "categorywise", "grouped by category"]):
+        help_tip = "Tip: For category details or summary queries, tap the category in the Reports for a full breakdown."
+    elif any(kw in q for kw in ["payment method", "upi", "cash", "card", "payment summary"]):
+        help_tip = "Tip: For payment details or summary queries, tap Payment in the Reports for a full breakdown."
+    elif any(kw in q for kw in ["month wise", "month summary", "monthly", "this month", "last month"]):
+        help_tip = "Tip: For month-wise or summary queries, tap the Month in the Reports for a full breakdown."
+    elif any(kw in q for kw in ["detail", "details", "summary"]):
+        help_tip = "Tip: For more details, explore the Reports page for a full breakdown."
+    entries = chat_response["entries"]
+    detailed = any(re.match(r"\d{4}-\d{2}-\d{2}", entry.get("header", "")) for entry in entries)
+    if help_tip and not detailed:
+        entries.append({"header": "", "detail": help_tip})
+    return chat_response
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
@@ -120,7 +146,6 @@ def ai_insight():
     filtered_tx = [tx for tx in tx_list if tx.get("Period") in allowed_periods]
     filtered_tx = filtered_tx[:1000]
 
-    # --- Robust chat query handling ---
     if query:
         query_lower = query.lower()
         target_period = period
@@ -151,11 +176,10 @@ def ai_insight():
         elif "cash" in query_lower:
             key_match = "cash"
 
-        # Handling: count
         if m_count and key_match:
             matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
-            header = generate_header_from_query(query)
-            return jsonify({
+            header = generate_header_from_query(query, key_match)
+            resp = {
                 "chat": {
                     "header": header,
                     "entries": [{
@@ -163,14 +187,15 @@ def ai_insight():
                         "detail": f"You made {len(matches)} {key_match} transactions in {target_period}."
                     }]
                 }
-            })
+            }
+            resp["chat"] = add_smart_help_tip(resp["chat"], query)
+            return jsonify(resp)
 
-        # Handling: total amount
         if m_total and key_match:
             matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
             total = sum(tx.get("Amount", 0) for tx in matches)
-            header = generate_header_from_query(query)
-            return jsonify({
+            header = generate_header_from_query(query, key_match)
+            resp = {
                 "chat": {
                     "header": header,
                     "entries": [{
@@ -178,9 +203,10 @@ def ai_insight():
                         "detail": f"Total spent for {key_match}: ₹{total:,.2f}"
                     }]
                 }
-            })
+            }
+            resp["chat"] = add_smart_help_tip(resp["chat"], query)
+            return jsonify(resp)
 
-        # Handling: comparison/trend
         if m_compare and key_match:
             tx1 = find_txn_matches_for_period(filtered_tx, key_match, period)
             tx2 = find_txn_matches_for_period(filtered_tx, key_match, prev_period)
@@ -188,8 +214,8 @@ def ai_insight():
             total2 = sum(tx.get("Amount", 0) for tx in tx2)
             diff = total1 - total2
             trend = "increased" if diff > 0 else "decreased"
-            header = generate_header_from_query(query)
-            return jsonify({
+            header = generate_header_from_query(query, key_match)
+            resp = {
                 "chat": {
                     "header": header,
                     "entries": [{
@@ -197,22 +223,25 @@ def ai_insight():
                         "detail": f"Compared to last month, your {key_match} spending {trend} by ₹{abs(diff):,.2f} ({total1:,.2f} vs {total2:,.2f})."
                     }]
                 }
-            })
+            }
+            resp["chat"] = add_smart_help_tip(resp["chat"], query)
+            return jsonify(resp)
 
-        # Handling: list all
         if m_list and key_match:
             matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
             entry_list = [{
                 "header": tx.get("Title", "") or tx.get("Transaction", ""),
                 "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date', '')}"
             } for tx in matches]
-            header = generate_header_from_query(query)
-            return jsonify({
+            header = generate_header_from_query(query, key_match)
+            resp = {
                 "chat": {
                     "header": header,
                     "entries": entry_list
                 }
-            })
+            }
+            resp["chat"] = add_smart_help_tip(resp["chat"], query)
+            return jsonify(resp)
 
         # Fallback: No match or advice/freeform chat (Send to GPT)
         expense_summary = group_by_category(filtered_tx, period, 0)
@@ -317,10 +346,10 @@ Output format:
             return normalized
 
         if "chat" in resp_json and "entries" in resp_json["chat"]:
-            # Always set a meaningful header
             if not resp_json["chat"].get("header"):
                 resp_json["chat"]["header"] = generate_header_from_query(query)
             resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
+            resp_json["chat"] = add_smart_help_tip(resp_json["chat"], query)
         return jsonify(resp_json)
 
     # ----------- INSIGHT FLOW -----------
