@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from flask import Flask, request, jsonify
 from openai import OpenAI
 from datetime import datetime
@@ -9,7 +10,7 @@ app = Flask(__name__)
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 def get_prev_period(period):
-    # Expects "YYYYMM" as input
+    """Return previous month in YYYYMM format."""
     if len(period) == 6 and period.isdigit():
         year = int(period[:4])
         month = int(period[4:6])
@@ -21,10 +22,15 @@ def get_prev_period(period):
         return f"{year}{month:02d}"
     return ""
 
-# Example stub helpers -- replace with your own implementations
+def count_merchant_purchases(filtered_tx, merchant_name):
+    count = 0
+    for tx in filtered_tx:
+        txn_name = tx.get("Transaction", "") or tx.get("Merchant", "") or tx.get("Title", "")
+        if merchant_name.lower() in txn_name.lower():
+            count += 1
+    return count
+
 def group_by_category(tx_list, period, type_value):
-    # Filter for current period and type (0 = expense, 1 = income)
-    # and aggregate by category
     summary = []
     for tx in tx_list:
         if tx.get("Period") == period and tx.get("Type") == type_value:
@@ -36,17 +42,15 @@ def group_by_category(tx_list, period, type_value):
                 found["count"] += 1
             else:
                 summary.append({"category": cat, "amount": amt, "count": 1})
-    # Format amounts as rupees string
     for item in summary:
         item["amount"] = f"₹{item['amount']:.2f}"
     return summary
 
 def group_by_merchant(tx_list, period, merchant_category):
-    # Simple example for merchant grouping
+    # Your actual implementation here if needed
     return []
 
 def group_by_payment(tx_list, period):
-    # Example: sum by Method
     summary = {}
     for tx in tx_list:
         if tx.get("Period") == period:
@@ -54,7 +58,6 @@ def group_by_payment(tx_list, period):
             amt = tx.get("Amount", 0)
             summary.setdefault(method, 0)
             summary[method] += amt
-    # Format as list of dict
     out = [{"method": k, "amount": f"₹{v:.2f}"} for k, v in summary.items()]
     return out
 
@@ -94,6 +97,25 @@ def ai_insight():
     if merchant_category:
         merchant_summary = group_by_merchant(filtered_tx, period, merchant_category)
     payment_summary = group_by_payment(filtered_tx, period)
+
+    # --- Merchant purchase count for queries like "How many times I bought Big Basket"
+    merchant_match = re.search(
+        r"(?:how many times|how often|count)\s.*?(?:buy|bought|purchase|ordered?)\s*(.*?)(?:\s*this month|\s*$)",
+        query, re.IGNORECASE
+    )
+    if merchant_match:
+        merchant_name = merchant_match.group(1).strip()
+        merchant_name = re.sub(r'(?:at|from|the|of|for|on)\s*', '', merchant_name, flags=re.IGNORECASE).strip()
+        count = count_merchant_purchases(filtered_tx, merchant_name)
+        return jsonify({
+            "chat": {
+                "header": f"{merchant_name} Transactions",
+                "entries": [{
+                    "header": "",
+                    "detail": f"You made {count} purchases at {merchant_name} this period."
+                }]
+            }
+        })
 
     # ----- INSIGHT REQUEST -----
     if not query:
@@ -226,6 +248,11 @@ Output format:
                         "header": entry.get("type", ""),
                         "detail": entry.get("content", "")
                     })
+                elif "detail" in entry and "header" in entry:
+                    normalized.append({
+                        "header": entry.get("header", ""),
+                        "detail": entry.get("detail", "")
+                    })
                 elif "text" in entry:
                     normalized.append({
                         "header": "",
@@ -243,6 +270,7 @@ Output format:
                 })
         return normalized
 
+    # Always normalize 'chat' for UI
     if "chat" in resp_json and "entries" in resp_json["chat"]:
         resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
 
