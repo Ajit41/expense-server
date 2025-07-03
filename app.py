@@ -2,14 +2,99 @@ import os
 import json
 from flask import Flask, request, jsonify
 from openai import OpenAI
+from datetime import datetime
 
 app = Flask(__name__)
+
+# --- Helper Functions ---
+
+def get_prev_period(period):
+    """Given 'YYYYMM', returns previous month as 'YYYYMM'."""
+    try:
+        dt = datetime.strptime(period, "%Y%m")
+        month = dt.month - 1
+        year = dt.year
+        if month == 0:
+            month = 12
+            year -= 1
+        return f"{year}{month:02d}"
+    except Exception:
+        return ""
+
+def group_by_category(transactions, period, tx_type):
+    """Group transactions by category and type (0 = expense, 1 = income)."""
+    summary = []
+    for tx in transactions:
+        if tx.get("Period") == period and tx.get("Type") == tx_type:
+            found = False
+            for s in summary:
+                if s["category"] == tx.get("Category"):
+                    s["amount"] += tx.get("Amount", 0)
+                    s["count"] += 1
+                    found = True
+                    break
+            if not found:
+                summary.append({
+                    "category": tx.get("Category", "Unknown"),
+                    "amount": tx.get("Amount", 0),
+                    "count": 1
+                })
+    # Format to 2 decimals
+    for s in summary:
+        s["amount"] = round(s["amount"], 2)
+    return summary
+
+def group_by_merchant(transactions, period, merchant_category):
+    """Group transactions for a specific merchant category."""
+    summary = []
+    for tx in transactions:
+        if tx.get("Period") == period and tx.get("Category") == merchant_category:
+            found = False
+            for s in summary:
+                if s["merchant"] == tx.get("Transaction"):
+                    s["amount"] += tx.get("Amount", 0)
+                    s["count"] += 1
+                    found = True
+                    break
+            if not found:
+                summary.append({
+                    "merchant": tx.get("Transaction", "Unknown"),
+                    "amount": tx.get("Amount", 0),
+                    "count": 1
+                })
+    for s in summary:
+        s["amount"] = round(s["amount"], 2)
+    return summary
+
+def group_by_payment(transactions, period):
+    """Group transactions by payment method for a given period."""
+    summary = []
+    for tx in transactions:
+        if tx.get("Period") == period:
+            found = False
+            for s in summary:
+                if s["method"] == tx.get("Method"):
+                    s["amount"] += tx.get("Amount", 0)
+                    s["count"] += 1
+                    found = True
+                    break
+            if not found:
+                summary.append({
+                    "method": tx.get("Method", "Unknown"),
+                    "amount": tx.get("Amount", 0),
+                    "count": 1
+                })
+    for s in summary:
+        s["amount"] = round(s["amount"], 2)
+    return summary
 
 # Load OpenAI API key
 client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
+    from datetime import datetime  # Redundant but safe if run in Render
+
     data        = request.get_json()
     tx_list     = data.get("transactions", [])
     period      = data.get("period", "")
@@ -21,7 +106,7 @@ def ai_insight():
     query       = data.get("query", "")
     budget      = data.get("budget", 0)
     days_left   = data.get("days_left", 0)
-    current_month_str = datetime.now().strftime("%Y%m")   # <-- Ensure this is set
+    current_month_str = datetime.now().strftime("%Y%m")
 
     allowed_periods = {period, prev_period}
     filtered_tx = [tx for tx in tx_list if tx.get("Period") in allowed_periods]
@@ -43,9 +128,9 @@ def ai_insight():
     merchant_summary = []
     if merchant_category:
         merchant_summary = group_by_merchant(filtered_tx, period, merchant_category)
-    payment_summary = group_by_payment(filtered_tx, period)   # <-- was mis-indented
+    payment_summary = group_by_payment(filtered_tx, period)
 
-      # ----- INSIGHT REQUEST -----
+    # ----- INSIGHT REQUEST -----
     if not query:
         prompt = f"""
 You are a finance insight assistant for a personal expense tracker.
@@ -141,7 +226,10 @@ Output format:
             temperature=0.65
         )
         response_text = chat_completion.choices[0].message.content
+        # Debug log for Render logs
+        print("RAW GPT RESPONSE:", response_text)
     except Exception as e:
+        print("GPT API Error:", str(e))
         return jsonify({"error": str(e)}), 500
 
     # Clean up GPT code block output
@@ -154,6 +242,7 @@ Output format:
     try:
         resp_json = json.loads(response_text)
     except Exception as e:
+        print("JSON PARSE ERROR:", str(e), "RAW:", response_text)
         return jsonify({
             "parse_error": str(e),
             "raw_response": response_text
