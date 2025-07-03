@@ -6,95 +6,60 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# --- Helper Functions ---
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 def get_prev_period(period):
-    """Given 'YYYYMM', returns previous month as 'YYYYMM'."""
-    try:
-        dt = datetime.strptime(period, "%Y%m")
-        month = dt.month - 1
-        year = dt.year
-        if month == 0:
-            month = 12
+    # Expects "YYYYMM" as input
+    if len(period) == 6 and period.isdigit():
+        year = int(period[:4])
+        month = int(period[4:6])
+        if month == 1:
             year -= 1
+            month = 12
+        else:
+            month -= 1
         return f"{year}{month:02d}"
-    except Exception:
-        return ""
+    return ""
 
-def group_by_category(transactions, period, tx_type):
-    """Group transactions by category and type (0 = expense, 1 = income)."""
+# Example stub helpers -- replace with your own implementations
+def group_by_category(tx_list, period, type_value):
+    # Filter for current period and type (0 = expense, 1 = income)
+    # and aggregate by category
     summary = []
-    for tx in transactions:
-        if tx.get("Period") == period and tx.get("Type") == tx_type:
-            found = False
-            for s in summary:
-                if s["category"] == tx.get("Category"):
-                    s["amount"] += tx.get("Amount", 0)
-                    s["count"] += 1
-                    found = True
-                    break
-            if not found:
-                summary.append({
-                    "category": tx.get("Category", "Unknown"),
-                    "amount": tx.get("Amount", 0),
-                    "count": 1
-                })
-    # Format to 2 decimals
-    for s in summary:
-        s["amount"] = round(s["amount"], 2)
+    for tx in tx_list:
+        if tx.get("Period") == period and tx.get("Type") == type_value:
+            cat = tx.get("Category", "Unknown")
+            amt = tx.get("Amount", 0)
+            found = next((item for item in summary if item["category"] == cat), None)
+            if found:
+                found["amount"] += amt
+                found["count"] += 1
+            else:
+                summary.append({"category": cat, "amount": amt, "count": 1})
+    # Format amounts as rupees string
+    for item in summary:
+        item["amount"] = f"₹{item['amount']:.2f}"
     return summary
 
-def group_by_merchant(transactions, period, merchant_category):
-    """Group transactions for a specific merchant category."""
-    summary = []
-    for tx in transactions:
-        if tx.get("Period") == period and tx.get("Category") == merchant_category:
-            found = False
-            for s in summary:
-                if s["merchant"] == tx.get("Transaction"):
-                    s["amount"] += tx.get("Amount", 0)
-                    s["count"] += 1
-                    found = True
-                    break
-            if not found:
-                summary.append({
-                    "merchant": tx.get("Transaction", "Unknown"),
-                    "amount": tx.get("Amount", 0),
-                    "count": 1
-                })
-    for s in summary:
-        s["amount"] = round(s["amount"], 2)
-    return summary
+def group_by_merchant(tx_list, period, merchant_category):
+    # Simple example for merchant grouping
+    return []
 
-def group_by_payment(transactions, period):
-    """Group transactions by payment method for a given period."""
-    summary = []
-    for tx in transactions:
+def group_by_payment(tx_list, period):
+    # Example: sum by Method
+    summary = {}
+    for tx in tx_list:
         if tx.get("Period") == period:
-            found = False
-            for s in summary:
-                if s["method"] == tx.get("Method"):
-                    s["amount"] += tx.get("Amount", 0)
-                    s["count"] += 1
-                    found = True
-                    break
-            if not found:
-                summary.append({
-                    "method": tx.get("Method", "Unknown"),
-                    "amount": tx.get("Amount", 0),
-                    "count": 1
-                })
-    for s in summary:
-        s["amount"] = round(s["amount"], 2)
-    return summary
-
-# Load OpenAI API key
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            method = tx.get("Method", "Unknown")
+            amt = tx.get("Amount", 0)
+            summary.setdefault(method, 0)
+            summary[method] += amt
+    # Format as list of dict
+    out = [{"method": k, "amount": f"₹{v:.2f}"} for k, v in summary.items()]
+    return out
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
-    from datetime import datetime  # Redundant but safe if run in Render
-
     data        = request.get_json()
     tx_list     = data.get("transactions", [])
     period      = data.get("period", "")
@@ -134,7 +99,6 @@ def ai_insight():
     if not query:
         prompt = f"""
 You are a finance insight assistant for a personal expense tracker.
-
 - Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs", or any other currency symbol.
 - Never recalculate totals or counts from raw transactions. Use ONLY the provided summaries below for your analysis.
 - For Payment Method, use payment_summary. For Merchant-Insights, use merchant_summary for the specified category.
@@ -145,12 +109,8 @@ You are a finance insight assistant for a personal expense tracker.
       “₹{{amt}} in {{category}} ({{count}} entries)”
     - Use “entries” (plural) unless count == 1.
     - **No section, suggestion, trend, or alert is valid without this format.**
-- This rule applies to Spend Timing Insights, Expense Density Map, Transaction Frequency, Zero-activity Categories, Missed Bills, Longest Expense Streak, ALL Smart Suggestions, and any optional or invented trends or alerts.
-- For Card usage (where Method or Category is “Cards”), always include: “₹{{amt}} at Cards ({{count}} entries)” and suggest avoiding card interest via UPI/cash (this can be included in small writing).
-- For Smart Suggestions and Other Notable Trends, you may invent new suggestions or trends if you discover other interesting, actionable patterns in the user's data.
-- All insights and suggestions must be positive, user-friendly, and suggest helpful next steps or actions for the user. Never use negative or discouraging language—always encourage, empower, and guide the user toward better financial choices.
+- All insights and suggestions must be positive, user-friendly, and suggest helpful next steps or actions for the user. Never use negative or discouraging language.
 - Never repeat or duplicate insights in this period.
-
 - **Section logic:**
   - Only show Forecast, Savings Trend, Saving Tip if period == current month ({current_month_str}).
   - High Spend must always use the required format.
@@ -226,13 +186,9 @@ Output format:
             temperature=0.65
         )
         response_text = chat_completion.choices[0].message.content
-        # Debug log for Render logs
-        print("RAW GPT RESPONSE:", response_text)
     except Exception as e:
-        print("GPT API Error:", str(e))
         return jsonify({"error": str(e)}), 500
 
-    # Clean up GPT code block output
     response_text = response_text.strip()
     if response_text.startswith("```json"):
         response_text = response_text[7:].strip("`").strip()
@@ -242,11 +198,53 @@ Output format:
     try:
         resp_json = json.loads(response_text)
     except Exception as e:
-        print("JSON PARSE ERROR:", str(e), "RAW:", response_text)
         return jsonify({
             "parse_error": str(e),
             "raw_response": response_text
         }), 500
+
+    # PATCH: Normalize chat entries for adapter consistency
+    def normalize_chat_entries(entries):
+        normalized = []
+        for entry in entries:
+            if isinstance(entry, dict):
+                if "amount" in entry and "category" in entry:
+                    normalized.append({
+                        "header": entry.get("category", ""),
+                        "detail": entry.get("amount", "")
+                    })
+                elif "title" in entry and "value" in entry:
+                    value = entry["value"]
+                    if isinstance(value, list):
+                        value = "\n".join(str(v) for v in value)
+                    normalized.append({
+                        "header": entry.get("title", ""),
+                        "detail": value
+                    })
+                elif "content" in entry:
+                    normalized.append({
+                        "header": entry.get("type", ""),
+                        "detail": entry.get("content", "")
+                    })
+                elif "text" in entry:
+                    normalized.append({
+                        "header": "",
+                        "detail": entry.get("text", "")
+                    })
+                else:
+                    normalized.append({
+                        "header": "",
+                        "detail": ", ".join(str(v) for v in entry.values())
+                    })
+            else:
+                normalized.append({
+                    "header": "",
+                    "detail": str(entry)
+                })
+        return normalized
+
+    if "chat" in resp_json and "entries" in resp_json["chat"]:
+        resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
 
     return jsonify(resp_json)
 
