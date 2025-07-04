@@ -155,7 +155,7 @@ def ai_insight():
             target_period = get_prev_period(period)
 
         m_count = re.search(r"(how many|count|times|number of)\s+(.*?)\s+(buy|bought|order|orders|purchase|purchases|transactions?)", query_lower)
-        m_total = re.search(r"(total|how much|sum|spent)\s+(.*?)\s+(on|for|in)?", query_lower)
+        m_total = re.search(r"(total|how much|sum|spent)\s+(.*?)(?:\s+(on|for|in|this month|current month))?$", query_lower)
         m_compare = re.search(r"(compare|more|less|difference|trend).*?(this|current)\s*month.*?(last|previous)\s*month", query_lower)
         m_list = re.search(r"(show|list|all)\s+(.*?)\s+(transactions?|orders?)", query_lower)
         m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query_lower)
@@ -308,12 +308,6 @@ You are a finance insight assistant for a personal expense tracker.
 - Spending Habit Alerts (frequent, time-of-day, or day-of-week patterns)
 - Avoidable Spending Suggestions (e.g., eating out, subscriptions, non-essential purchases)
 - Recurring Micro-Spends (multiple small transactions, e.g., “Below ₹500” in same or similar categories/merchants)
-- Spending Control Encouragement (praise or suggest targets for low-spend categories)
-- Expense Density Map (which days or categories are most/least active)
-- Transaction Frequency (how often user transacts, spikes or lulls)
-- Zero-Activity or Category Neglect (warn if a usual category is unused)
-- Irregular Spending in Core Categories (unexpected dips or spikes)
-- Repeated Merchant Spend (multiple transactions at the same merchant)
 - And any other interesting, positive, actionable patterns you notice in the summaries!
 
 Data available to you:
@@ -521,20 +515,23 @@ Required insight_groups (include only if relevant data is available):
     elif response_text.startswith("```"):
         response_text = response_text[3:].strip("`").strip()
 
-    try:
-        resp_json = json.loads(response_text)
-        if not resp_json or ("insight_groups" in resp_json and not resp_json["insight_groups"]):
-            raise ValueError("No insight_groups or null received")
-    except Exception as e:
-        return jsonify({
-            "insight_groups": [{
-                "header": "No Data",
-                "detail": "No valid insight found. Please try again later.",
-                "type": "empty",
-                "category": "None",
-                "transactions": []
-            }]
-        }), 200
+try:
+    resp_json = json.loads(response_text)
+    if not resp_json or ("insight_groups" in resp_json and not resp_json["insight_groups"]):
+        raise ValueError("No insight_groups or null received")
+except Exception as e:
+    return jsonify({
+        "parse_error": str(e),
+        "raw_response": response_text,  # Useful for debugging
+        "insight_groups": [{
+            "header": "No Data",
+            "detail": "No valid insight found. Please try again later.",
+            "type": "empty",
+            "category": "None",
+            "transactions": []
+        }]
+    }), 200
+
 
     return jsonify(resp_json)
 
