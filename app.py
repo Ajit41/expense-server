@@ -296,7 +296,8 @@ You are a finance insight assistant for a personal expense tracker.
 - Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs", or any other currency symbol.
 - Never recalculate totals or counts from raw transactions. Use ONLY the provided summaries below for your analysis.
 - For Payment Method, use payment_summary. For Merchant-Insights, use merchant_summary for the specified category.
--Respond ONLY with a valid JSON object matching the required structure. Do not include any explanations, markdown, or extra text. The first character MUST be `{{` and the last character must be `}}`.
+-Respond with a valid JSON object matching the required structure below. Do not include markdown formatting or explanations. Your response must start with `{` and end with `}`.
+
 - For every section, smart suggestion, notable trend, alert, or data point (including “small writing” and optional/creative insights):
     - **You MUST always use this format for every value:**  
       “₹{{amt}} at {{category}} ({{count}} entries)”  
@@ -519,30 +520,37 @@ Required insight_groups (include only if relevant data is available):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
     response_text = response_text.strip()
     if response_text.startswith("```json"):
         response_text = response_text[7:].strip("`").strip()
     elif response_text.startswith("```"):
         response_text = response_text[3:].strip("`").strip()
 
+    print("Raw GPT response:\n", response_text)  # ✅ Move here before parsing
+
     try:
         resp_json = json.loads(response_text)
         if not resp_json or ("insight_groups" in resp_json and not resp_json["insight_groups"]):
-            raise ValueError("No insight_groups or null received")
+            return jsonify({
+                "parse_error": "No insight_groups or null received",
+                "raw_response": response_text,
+                "insight_groups": [{
+                    "header": "No Data",
+                    "detail": "No valid insight found. Please try again later.",
+                    "type": "empty",
+                    "category": "None",
+                    "transactions": []
+                }]
+            }), 200
     except Exception as e:
-        return jsonify({   # <-- MUST be inside the function and properly indented
+        return jsonify({
             "parse_error": str(e),
-            "raw_response": response_text,
-            "insight_groups": [{
-                "header": "No Data",
-                "detail": "No valid insight found. Please try again later.",
-                "type": "empty",
-                "category": "None",
-                "transactions": []
-            }]
-        }), 200
+            "raw_response": response_text
+        }), 500
 
     return jsonify(resp_json)
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
