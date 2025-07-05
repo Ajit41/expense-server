@@ -296,7 +296,7 @@ You are a finance insight assistant for a personal expense tracker.
 - Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs", or any other currency symbol.
 - Never recalculate totals or counts from raw transactions. Use ONLY the provided summaries below for your analysis.
 - For Payment Method, use payment_summary. For Merchant-Insights, use merchant_summary for the specified category.
--Respond with a valid JSON object matching the required structure below. Do not include markdown formatting or explanations. Your response must start with `{` and end with `}`.
+-Respond with a valid JSON object matching the required structure below. Do not include markdown formatting or explanations. Your response must start with `{{` and end with `}}`.
 
 - For every section, smart suggestion, notable trend, alert, or data point (including “small writing” and optional/creative insights):
     - **You MUST always use this format for every value:**  
