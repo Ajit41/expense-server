@@ -80,6 +80,7 @@ def group_by_payment(tx_list, period):
     return out
 
 def generate_header_from_query(q, key_match=None):
+    """Make header from user's intent and matched keyword."""
     q_lower = q.lower()
     if key_match:
         if any(word in q_lower for word in ["how much", "total", "spent", "cost"]):
@@ -102,10 +103,12 @@ def generate_header_from_query(q, key_match=None):
     return q.strip().capitalize()[:40] or "Chat Query"
 
 def add_smart_help_tip(chat_response, user_query):
+    """Appends a friendly tip based on query intent if not already a detailed breakdown."""
     if not chat_response or "entries" not in chat_response:
         return chat_response
     q = user_query.lower()
     help_tip = None
+
     if any(kw in q for kw in ["payee", "person", "who", "to whom"]):
         help_tip = "Tip: For transaction details, tap the payee in the Reports page for a full breakdown."
     elif any(kw in q for kw in ["date wise", "by date", "datewise", "on which date", "all transactions", "each day"]):
@@ -116,10 +119,6 @@ def add_smart_help_tip(chat_response, user_query):
         help_tip = "Tip: For payment details or summary queries, tap Payment in the Reports for a full breakdown."
     elif any(kw in q for kw in ["month wise", "month summary", "monthly", "this month", "last month"]):
         help_tip = "Tip: For month-wise or summary queries, tap the Month in the Reports for a full breakdown."
-    elif any(kw in q for kw in ["export", "download", "csv", "excel", "report"]):
-        help_tip = "Tip: Use the 'Export' feature in settings to download your data in Excel/CSV format."
-    elif any(kw in q for kw in ["trend", "pattern", "forecast", "future", "expected"]):
-        help_tip = "Tip: Tap Insights in the menu for complete trends and forecast."
     elif any(kw in q for kw in ["detail", "details", "summary"]):
         help_tip = "Tip: For more details, explore the Reports page for a full breakdown."
     entries = chat_response["entries"]
@@ -159,10 +158,9 @@ def ai_insight():
             target_period = get_prev_period(period)
 
         m_count = re.search(r"(how many|count|times|number of)\s+(.*?)\s+(buy|bought|order|orders|purchase|purchases|transactions?)", query_lower)
-        m_total = re.search(r"(total|how much|sum|spent)\s+(.*?)(?:\s+(on|for|in|this month|current month))?$", query_lower)
+        m_total = re.search(r"(total|how much|sum|spent)\s+(.*?)\s+(on|for|in)?", query_lower)
         m_compare = re.search(r"(compare|more|less|difference|trend).*?(this|current)\s*month.*?(last|previous)\s*month", query_lower)
         m_list = re.search(r"(show|list|all)\s+(.*?)\s+(transactions?|orders?)", query_lower)
-        m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query_lower)
 
         key_match = None
         if m_count:
@@ -171,42 +169,12 @@ def ai_insight():
             key_match = m_total.group(2)
         elif m_list:
             key_match = m_list.group(2)
-        elif m_below:
-            key_match = f"Below ₹{m_below.group(2)}"
         elif "upi" in query_lower:
             key_match = "upi"
         elif "card" in query_lower:
             key_match = "card"
         elif "cash" in query_lower:
             key_match = "cash"
-
-        # Micro-spends: "Below ₹500", etc.
-        if m_below:
-            try:
-                amount_limit = int(m_below.group(2))
-            except:
-                amount_limit = 500
-            below_matches = [
-                tx for tx in filtered_tx if tx.get("Amount", 0) < amount_limit and tx.get("Period") == target_period
-            ]
-            entry_list = [
-                {
-                    "header": tx.get("Title", "") or tx.get("Transaction", ""),
-                    "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date', '')}"
-                }
-                for tx in below_matches
-            ]
-            resp = {
-                "chat": {
-                    "header": f"Transactions Below ₹{amount_limit}",
-                    "entries": entry_list if entry_list else [{
-                        "header": "",
-                        "detail": f"No transactions below ₹{amount_limit} for {target_period}."
-                    }]
-                }
-            }
-            resp["chat"] = add_smart_help_tip(resp["chat"], query)
-            return jsonify(resp)
 
         if m_count and key_match:
             matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
@@ -277,51 +245,22 @@ def ai_insight():
 
         # Fallback: No match or advice/freeform chat (Send to GPT)
         expense_summary = group_by_category(filtered_tx, period, 0)
-        # Optional: append micro-spend summary
-        micro_spends = [tx for tx in filtered_tx if tx.get("Amount", 0) < 500 and tx.get("Period") == period]
-        if micro_spends:
-            micro_amt = sum(tx.get("Amount", 0) for tx in micro_spends)
-            expense_summary.append({
-                "category": "Micro-Spends (Below ₹500)",
-                "amount": f"₹{micro_amt:.2f}",
-                "count": len(micro_spends)
-            })
         income_summary = group_by_category(filtered_tx, period, 1)
         merchant_summary = group_by_merchant(filtered_tx, period, merchant_category) if merchant_category else group_by_merchant(filtered_tx, period)
         payment_summary = group_by_payment(filtered_tx, period)
 
         prompt = f"""
-You are a finance insight assistant for a personal expense tracker.
+You are a smart financial chat assistant.
+Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs" or any other currency symbol.
+Use ONLY the provided category/income/merchant/payment summaries for your analysis.
+Never guess or make assumptions. If no matching data exists: return “No data for this period.”
+**For every answer (including category or merchant summaries):**
+- Always respond in this strict format for each entry:
+    - "₹{{amount}} at {{category_or_merchant}} ({{count}} entries)"
+    - or "₹{{amount}} in {{category_or_merchant}} ({{count}} entries)"
+- Never use any other format, never omit the count, and never change the order or words.
+- Do not use commas or other separators in entries, always use the required string above.
 
-- Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs", or any other currency symbol.
-- Never recalculate totals or counts from raw transactions. Use ONLY the provided summaries below for your analysis.
-- For Payment Method, use payment_summary. For Merchant-Insights, use merchant_summary for the specified category.
--Respond with a valid JSON object matching the required structure below. Do not include markdown formatting or explanations. Your response must start with `{{` and end with `}}`.
-
-- For every section, smart suggestion, notable trend, alert, or data point (including “small writing” and optional/creative insights):
-    - **You MUST always use this format for every value:**  
-      “₹{{amt}} at {{category}} ({{count}} entries)”  
-      or  
-      “₹{{amt}} in {{category}} ({{count}} entries)”
-    - Use “entries” (plural) unless count == 1.
-    - **No section, suggestion, trend, or alert is valid without this format.**
-
-- Insights and suggestions must be positive, user-friendly, and actionable—never negative.
-- Never repeat or duplicate insights in this period.
-
-**Extra insights/trends to always consider/invent if data is available:**
-- Spending Habit Alerts (frequent, time-of-day, or day-of-week patterns)
-- Avoidable Spending Suggestions (e.g., eating out, subscriptions, non-essential purchases)
-- Recurring Micro-Spends (multiple small transactions, e.g., “Below ₹500” in same or similar categories/merchants)
-- And any other interesting, positive, actionable patterns you notice in the summaries!
-- Spending Control Encouragement (praise or suggest targets for low-spend categories)
-- Expense Density Map (which days or categories are most/least active)
-- Transaction Frequency (how often user transacts, spikes or lulls)
-- Zero-Activity or Category Neglect (warn if a usual category is unused)
-- Irregular Spending in Core Categories (unexpected dips or spikes)
-- Repeated Merchant Spend (multiple transactions at the same merchant)
-
-Data available to you:
 category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
 income_summary: {json.dumps(income_summary, separators=(',', ':'))}
 payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
@@ -331,21 +270,10 @@ prev_period: {prev_period}
 budget: {budget}
 days_left: {days_left}
 current_month: {current_month_str}
+query: "{query}"
 
-Required insight_groups (include only if relevant data is available):
-- Summary (Spending Behavior)
-- Income vs Expense
-- Expense Comparison (Only if both periods have matching data)
-- Cash Flow
-- High Spend (Top 3 categories by amount)
-- Category Comparison with previous period
-- Merchant-Insights (for the specified category, use merchant_summary)
-- At least 4-5 Smart Suggestions (each with category, amount, and count)
-- 2-3 Optional trends/alerts (including from above or invented)
-- Saving Tip (if current month = period)
-- Savings Trend (if current month = period)
-- Remaining Budget
-- Forecast (if current month = period)
+Output format:
+{{"chat": {{"header": "...", "entries": [...] }}}}
 """
         try:
             chat_completion = client.chat.completions.create(
@@ -365,7 +293,6 @@ Required insight_groups (include only if relevant data is available):
             response_text = response_text[7:].strip("`").strip()
         elif response_text.startswith("```"):
             response_text = response_text[3:].strip("`").strip()
-
         try:
             resp_json = json.loads(response_text)
         except Exception as e:
@@ -427,15 +354,6 @@ Required insight_groups (include only if relevant data is available):
 
     # ----------- INSIGHT FLOW -----------
     expense_summary = group_by_category(filtered_tx, period, 0)
-    # Optionally add micro-spends for AI summary
-    micro_spends = [tx for tx in filtered_tx if tx.get("Amount", 0) < 500 and tx.get("Period") == period]
-    if micro_spends:
-        micro_amt = sum(tx.get("Amount", 0) for tx in micro_spends)
-        expense_summary.append({
-            "category": "Micro-Spends (Below ₹500)",
-            "amount": f"₹{micro_amt:.2f}",
-            "count": len(micro_spends)
-        })
     income_summary = group_by_category(filtered_tx, period, 1)
     merchant_summary = group_by_merchant(filtered_tx, period, merchant_category) if merchant_category else group_by_merchant(filtered_tx, period)
     payment_summary = group_by_payment(filtered_tx, period)
@@ -466,20 +384,27 @@ You are a finance insight assistant for a personal expense tracker.
     - Use “entries” (plural) unless count == 1.
     - **No section, suggestion, trend, or alert is valid without this format.**
 
-- Insights and suggestions must be positive, user-friendly, and actionable—never negative.
+- **Smart Suggestions and all advice must be:**
+    - Positive, user-friendly, and always suggest a simple next step or a small “win”
+    - Brief (1–2 sentences only), never generic or negative
+    - Always framed in an encouraging way, e.g. “Great job…” “Consider…” “Try…”
+    - Never use language like “cut down,” “reduce,” “avoid”—instead use positive suggestions (“Explore”, “Enjoy”, “Consider optimizing”, “Keep it up!”)
+
+- **Category Comparison with previous period:**
+    - Always state if this month is higher/lower than last month in **percentage (%)** terms.
+    - Mention both amount and count for each period.
+    - Example:  
+      “Home Expense is 23% higher this month (₹2710.16 vs ₹2200, 20 entries vs 18). Well done keeping your spending focused.”
+
 - Never repeat or duplicate insights in this period.
 
-**Extra insights/trends to always consider/invent if data is available:**
-- Spending Habit Alerts (frequent, time-of-day, or day-of-week patterns)
-- Avoidable Spending Suggestions (e.g., eating out, subscriptions, non-essential purchases)
-- Recurring Micro-Spends (multiple small transactions, e.g., “Below ₹500” in same or similar categories/merchants)
-- Spending Control Encouragement (praise or suggest targets for low-spend categories)
-- Expense Density Map (which days or categories are most/least active)
-- Transaction Frequency (how often user transacts, spikes or lulls)
-- Zero-Activity or Category Neglect (warn if a usual category is unused)
-- Irregular Spending in Core Categories (unexpected dips or spikes)
-- Repeated Merchant Spend (multiple transactions at the same merchant)
-- And any other interesting, positive, actionable patterns you notice in the summaries!
+- **Section logic:**
+    - Only show Forecast, Savings Trend, Saving Tip if period == current month ({current_month_str}).
+    - High Spend must always use the required format.
+    - Merchant-Insights must use merchant_summary if present.
+    - Remaining Budget must always state budget left in rupees and how much spent.
+    - Category Comparison must compare with previous period (if available) and mention categories and counts in format, always using % higher/lower language.
+    - All sections and suggestions must always state data in the specified format (no exceptions).
 
 Data available to you:
 category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
@@ -501,11 +426,19 @@ Required insight_groups (include only if relevant data is available):
 - Category Comparison with previous period
 - Merchant-Insights (for the specified category, use merchant_summary)
 - At least 4-5 Smart Suggestions (each with category, amount, and count)
-- 2-3 Optional trends/alerts (including from above or invented)
+- 2-3 Optional trends/alerts (optional, as described above)
 - Saving Tip (if current month = period)
 - Savings Trend (if current month = period)
 - Remaining Budget
 - Forecast (if current month = period)
+
+Respond in this JSON format:
+{{
+  "insight_groups": [
+    {{"header": "...", "detail": "...", "type": "...", "category": "...", "transactions":[]}},
+    ...
+  ]
+}}
 """
     try:
         chat_completion = client.chat.completions.create(
@@ -520,37 +453,28 @@ Required insight_groups (include only if relevant data is available):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
     response_text = response_text.strip()
     if response_text.startswith("```json"):
         response_text = response_text[7:].strip("`").strip()
     elif response_text.startswith("```"):
         response_text = response_text[3:].strip("`").strip()
 
-    print("Raw GPT response:\n", response_text)  # ✅ Move here before parsing
-
     try:
         resp_json = json.loads(response_text)
         if not resp_json or ("insight_groups" in resp_json and not resp_json["insight_groups"]):
-            return jsonify({
-                "parse_error": "No insight_groups or null received",
-                "raw_response": response_text,
-                "insight_groups": [{
-                    "header": "No Data",
-                    "detail": "No valid insight found. Please try again later.",
-                    "type": "empty",
-                    "category": "None",
-                    "transactions": []
-                }]
-            }), 200
+            raise ValueError("No insight_groups or null received")
     except Exception as e:
         return jsonify({
-            "parse_error": str(e),
-            "raw_response": response_text
-        }), 500
+            "insight_groups": [{
+                "header": "No Data",
+                "detail": "No valid insight found. Please try again later.",
+                "type": "empty",
+                "category": "None",
+                "transactions": []
+            }]
+        }), 200
 
     return jsonify(resp_json)
-
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
