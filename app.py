@@ -116,6 +116,10 @@ def add_smart_help_tip(chat_response, user_query):
         help_tip = "Tip: For payment details or summary queries, tap Payment in the Reports for a full breakdown."
     elif any(kw in q for kw in ["month wise", "month summary", "monthly", "this month", "last month"]):
         help_tip = "Tip: For month-wise or summary queries, tap the Month in the Reports for a full breakdown."
+    elif any(kw in q for kw in ["export", "download", "csv", "excel", "report"]):
+        help_tip = "Tip: Use the 'Export' feature in settings to download your data in Excel/CSV format."
+    elif any(kw in q for kw in ["trend", "pattern", "forecast", "future", "expected"]):
+        help_tip = "Tip: Tap Insights in the menu for complete trends and forecast."
     elif any(kw in q for kw in ["detail", "details", "summary"]):
         help_tip = "Tip: For more details, explore the Reports page for a full breakdown."
     entries = chat_response["entries"]
@@ -309,6 +313,12 @@ You are a finance insight assistant for a personal expense tracker.
 - Avoidable Spending Suggestions (e.g., eating out, subscriptions, non-essential purchases)
 - Recurring Micro-Spends (multiple small transactions, e.g., “Below ₹500” in same or similar categories/merchants)
 - And any other interesting, positive, actionable patterns you notice in the summaries!
+- Spending Control Encouragement (praise or suggest targets for low-spend categories)
+- Expense Density Map (which days or categories are most/least active)
+- Transaction Frequency (how often user transacts, spikes or lulls)
+- Zero-Activity or Category Neglect (warn if a usual category is unused)
+- Irregular Spending in Core Categories (unexpected dips or spikes)
+- Repeated Merchant Spend (multiple transactions at the same merchant)
 
 Data available to you:
 category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
@@ -515,23 +525,22 @@ Required insight_groups (include only if relevant data is available):
     elif response_text.startswith("```"):
         response_text = response_text[3:].strip("`").strip()
 
-try:
-    resp_json = json.loads(response_text)
-    if not resp_json or ("insight_groups" in resp_json and not resp_json["insight_groups"]):
-        raise ValueError("No insight_groups or null received")
-except Exception as e:
-    return jsonify({
-        "parse_error": str(e),
-        "raw_response": response_text,  # Useful for debugging
-        "insight_groups": [{
-            "header": "No Data",
-            "detail": "No valid insight found. Please try again later.",
-            "type": "empty",
-            "category": "None",
-            "transactions": []
-        }]
-    }), 200
-
+    try:
+        resp_json = json.loads(response_text)
+        if not resp_json or ("insight_groups" in resp_json and not resp_json["insight_groups"]):
+            raise ValueError("No insight_groups or null received")
+    except Exception as e:
+        return jsonify({   # <-- MUST be inside the function and properly indented
+            "parse_error": str(e),
+            "raw_response": response_text,
+            "insight_groups": [{
+                "header": "No Data",
+                "detail": "No valid insight found. Please try again later.",
+                "type": "empty",
+                "category": "None",
+                "transactions": []
+            }]
+        }), 200
 
     return jsonify(resp_json)
 
