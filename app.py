@@ -158,7 +158,9 @@ def ai_insight():
     days_left   = data.get("days_left", 0)
     current_month_str = datetime.now().strftime("%Y%m")
 
-	filtered_tx = [tx for tx in tx_list if tx.get("Period") == period][:1000]
+    # Always filter and build everything; select what you need later
+    filtered_tx = [tx for tx in tx_list if tx.get("Period") == period]
+    filtered_tx = filtered_tx[:1000]
     filtered_tx_prev = [tx for tx in tx_list if tx.get("Period") == prev_period]
 
     if query:
