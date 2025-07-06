@@ -80,6 +80,7 @@ def group_by_payment(tx_list, period):
     return out
 
 def generate_header_from_query(q, key_match=None):
+    """Make header from user's intent and matched keyword."""
     q_lower = q.lower()
     if key_match:
         if any(word in q_lower for word in ["how much", "total", "spent", "cost"]):
@@ -102,10 +103,12 @@ def generate_header_from_query(q, key_match=None):
     return q.strip().capitalize()[:40] or "Chat Query"
 
 def add_smart_help_tip(chat_response, user_query):
+    """Appends a friendly tip based on query intent if not already a detailed breakdown."""
     if not chat_response or "entries" not in chat_response:
         return chat_response
     q = user_query.lower()
     help_tip = None
+
     if any(kw in q for kw in ["payee", "person", "who", "to whom"]):
         help_tip = "Tip: For transaction details, tap the payee in the Reports page for a full breakdown."
     elif any(kw in q for kw in ["date wise", "by date", "datewise", "on which date", "all transactions", "each day"]):
@@ -123,267 +126,264 @@ def add_smart_help_tip(chat_response, user_query):
     if help_tip and not detailed:
         entries.append({"header": "", "detail": help_tip})
     return chat_response
-
-def advanced_intent_detection(query):
-    q = (query or "").lower()
-    intent = {
-        "summary": not q or "summary" in q or "overall" in q,
-        "comparison": any(x in q for x in ["compare", "trend", "change", "vs", "increase", "decrease", "difference", "growth", "fall", "drop", "rise", "last month", "previous month", "higher", "lower"]),
-        "category": "category" in q or "spending" in q,
-        "merchant": "merchant" in q or "shop" in q or "store" in q,
-        "payment": "payment" in q or "upi" in q or "cash" in q or "card" in q or "method" in q,
-        "forecast": any(x in q for x in ["predict", "forecast", "next month", "expected", "future"]),
-        "trend": "trend" in q or "pattern" in q,
-        "anomaly": "unusual" in q or "anomaly" in q or "suspicious" in q,
-        "saving": "saving" in q or "budget" in q or "save" in q
+m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
+if m_below:
+    amount_limit = int(m_below.group(2)) if m_below.group(2).isdigit() else 500
+    matches = [tx for tx in filtered_tx if tx.get("Amount", 0) < amount_limit]
+    entry_list = [{
+        "header": tx.get("Title", "") or tx.get("Transaction", ""),
+        "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date') or f'Period {tx.get('Period', '')}'}"
+    } for tx in matches]
+    resp = {
+        "chat": {
+            "header": f"Transactions Below ₹{amount_limit}",
+            "entries": entry_list if entry_list else [{"header": "", "detail": f"No transactions below ₹{amount_limit} for {period}."}]
+        }
     }
-    if not any(intent.values()):
-        intent["summary"] = True
-    return intent
-
-def build_summaries(tx_list, period, prev_period, merchant_category=None):
-    filtered_tx = [tx for tx in tx_list if tx.get("Period") == period]
-    filtered_tx_prev = [tx for tx in tx_list if tx.get("Period") == prev_period]
-    summary = {
-        "category_summary": group_by_category(filtered_tx, period, 0),
-        "category_summary_prev": group_by_category(filtered_tx_prev, prev_period, 0),
-        "income_summary": group_by_category(filtered_tx, period, 1),
-        "income_summary_prev": group_by_category(filtered_tx_prev, prev_period, 1),
-        "merchant_summary": group_by_merchant(filtered_tx, period, merchant_category) if merchant_category else group_by_merchant(filtered_tx, period),
-        "merchant_summary_prev": group_by_merchant(filtered_tx_prev, prev_period, merchant_category) if merchant_category else group_by_merchant(filtered_tx_prev, prev_period),
-        "payment_summary": group_by_payment(filtered_tx, period),
-        "payment_summary_prev": group_by_payment(filtered_tx_prev, prev_period),
-        "micro_spends": [tx for tx in filtered_tx if tx.get("Amount", 0) < 500]
-    }
-    if summary["micro_spends"]:
-        micro_amt = sum(tx.get("Amount", 0) for tx in summary["micro_spends"])
-        summary["category_summary"].append({
-            "category": "Micro-Spends (Below ₹500)",
-            "amount": f"₹{micro_amt:.2f}",
-            "count": len(summary["micro_spends"])
-        })
-    return summary
-
-def get_biggest_transactions(tx_list, period, top_n=3):
-    tx_in_period = [tx for tx in tx_list if tx.get("Period") == period]
-    sorted_tx = sorted(tx_in_period, key=lambda x: x.get("Amount", 0), reverse=True)
-    biggest = sorted_tx[:top_n]
-    entries = []
-    for tx in biggest:
-        title = tx.get("Title") or tx.get("Transaction") or tx.get("Merchant") or "Unknown"
-        amount = tx.get("Amount", 0)
-        date = tx.get("Date", "") or f"Period {period}"
-        entries.append({
-            "header": title,
-            "detail": f"₹{amount:,.2f} on {date}"
-        })
-    return {
-        "header": f"Top {top_n} Biggest Transactions",
-        "entries": entries
-    }
-
-def get_budget_progress_summary(expense_summary, budget, period):
-    total_expense = sum(float(item['amount'].replace('₹', '').replace(',', '')) for item in expense_summary)
-    percent = (total_expense / budget * 100) if budget else 0
-    entries = [{
-        "header": "Budget Progress",
-        "detail": f"₹{total_expense:,.2f} spent out of ₹{budget:,.2f} ({percent:.1f}%)"
-    }]
-    if percent >= 90:
-        entries.append({
-            "header": "Alert",
-            "detail": "You have used 90% or more of your budget!"
-        })
-    elif percent >= 75:
-        entries.append({
-            "header": "Alert",
-            "detail": "You have used 75% or more of your budget."
-        })
-    return {
-        "header": "Budget Progress",
-        "entries": entries
-    }
-
-def get_month_on_month_comparison(expense_summary, expense_summary_prev, period, prev_period):
-    def total(summary):
-        return sum(float(item['amount'].replace('₹', '').replace(',', '')) for item in summary)
-    total_this = total(expense_summary)
-    total_prev = total(expense_summary_prev)
-    diff = total_this - total_prev
-    percent = (diff / total_prev * 100) if total_prev else 0
-    trend = "increased" if diff > 0 else "decreased"
-    entries = [{
-        "header": f"{period} vs {prev_period}",
-        "detail": f"Total expenses {trend} by ₹{abs(diff):,.2f} ({percent:+.1f}%) — ₹{total_this:,.2f} vs ₹{total_prev:,.2f}"
-    }]
-    return {
-        "header": "Month-on-Month Comparison",
-        "entries": entries
-    }
-
-def construct_prompt(intent, summary, context):
-    blocks = []
-    if intent["summary"]:
-        blocks += [
-            f"category_summary: {json.dumps(summary['category_summary'], separators=(',', ':'))}",
-            f"income_summary: {json.dumps(summary['income_summary'], separators=(',', ':'))}"
-        ]
-    if intent["comparison"]:
-        blocks += [
-            f"category_summary: {json.dumps(summary['category_summary'], separators=(',', ':'))}",
-            f"category_summary_prev: {json.dumps(summary['category_summary_prev'], separators=(',', ':'))}",
-            f"merchant_summary: {json.dumps(summary['merchant_summary'], separators=(',', ':'))}",
-            f"merchant_summary_prev: {json.dumps(summary['merchant_summary_prev'], separators=(',', ':'))}",
-            f"payment_summary: {json.dumps(summary['payment_summary'], separators=(',', ':'))}",
-            f"payment_summary_prev: {json.dumps(summary['payment_summary_prev'], separators=(',', ':'))}"
-        ]
-    elif intent["merchant"]:
-        blocks += [f"merchant_summary: {json.dumps(summary['merchant_summary'], separators=(',', ':'))}"]
-    elif intent["payment"]:
-        blocks += [f"payment_summary: {json.dumps(summary['payment_summary'], separators=(',', ':'))}"]
-    if intent["forecast"] or intent["trend"]:
-        blocks += [
-            f"category_summary: {json.dumps(summary['category_summary'], separators=(',', ':'))}",
-            f"category_summary_prev: {json.dumps(summary['category_summary_prev'], separators=(',', ':'))}"
-        ]
-    if intent["saving"]:
-        blocks += [f"income_summary: {json.dumps(summary['income_summary'], separators=(',', ':'))}"]
-    blocks += [
-        f"period: {context['period']}",
-        f"prev_period: {context['prev_period']}",
-        f"budget: {context['budget']}",
-        f"days_left: {context['days_left']}",
-        f"current_month: {context['current_month_str']}"
-    ]
-    return "\n".join(blocks)
+    resp["chat"] = add_smart_help_tip(resp["chat"], query)
+    return jsonify(resp)
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
-    data = request.get_json()
-    tx_list = data.get("transactions", [])
-    period = data.get("period", "")
+    data        = request.get_json()
+    tx_list     = data.get("transactions", [])
+    period      = data.get("period", "")
     merchant_category = data.get("merchant_category")
     if not period:
         return jsonify({"error": "Missing required field: period"}), 400
 
     prev_period = get_prev_period(period)
-    query = (data.get("query", "") or "").strip()
-    budget = data.get("budget", 0)
-    days_left = data.get("days_left", 0)
+    query       = (data.get("query", "") or "").strip()
+    budget      = data.get("budget", 0)
+    days_left   = data.get("days_left", 0)
     current_month_str = datetime.now().strftime("%Y%m")
 
-    def is_comparison_query(q):
-        q = (q or "").lower()
-        return any(kw in q for kw in [
-            "compare", "comparison", "trend", "change", "vs", "versus",
-            "last month", "previous month", "increase", "decrease", "difference"
-        ])
-    comparison_mode = is_comparison_query(query)
-    filtered_tx = [tx for tx in tx_list if tx.get("Period") == period][:1000]
+	filtered_tx = [tx for tx in tx_list if tx.get("Period") == period][:1000]
     filtered_tx_prev = [tx for tx in tx_list if tx.get("Period") == prev_period]
 
+    if query:
+        query_lower = query.lower()
+        target_period = period
+        compare_period = None
+        if "last month" in query_lower or "previous month" in query_lower:
+            compare_period = get_prev_period(period)
+        if "this month" in query_lower or "current month" in query_lower:
+            target_period = period
+        elif "last month" in query_lower:
+            target_period = get_prev_period(period)
+
+        m_count = re.search(r"(how many|count|times|number of)\s+(.*?)\s+(buy|bought|order|orders|purchase|purchases|transactions?)", query_lower)
+        m_total = re.search(r"(total|how much|sum|spent)\s+(.*?)\s+(on|for|in)?", query_lower)
+        m_compare = re.search(r"(compare|more|less|difference|trend).*?(this|current)\s*month.*?(last|previous)\s*month", query_lower)
+        m_list = re.search(r"(show|list|all)\s+(.*?)\s+(transactions?|orders?)", query_lower)
+
+        key_match = None
+        if m_count:
+            key_match = m_count.group(2)
+        elif m_total:
+            key_match = m_total.group(2)
+        elif m_list:
+            key_match = m_list.group(2)
+        elif "upi" in query_lower:
+            key_match = "upi"
+        elif "card" in query_lower:
+            key_match = "card"
+        elif "cash" in query_lower:
+            key_match = "cash"
+
+        if m_count and key_match:
+            matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
+            header = generate_header_from_query(query, key_match)
+            resp = {
+                "chat": {
+                    "header": header,
+                    "entries": [{
+                        "header": "",
+                        "detail": f"You made {len(matches)} {key_match} transactions in {target_period}."
+                    }]
+                }
+            }
+            resp["chat"] = add_smart_help_tip(resp["chat"], query)
+            return jsonify(resp)
+
+        if m_total and key_match:
+            matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
+            total = sum(tx.get("Amount", 0) for tx in matches)
+            header = generate_header_from_query(query, key_match)
+            resp = {
+                "chat": {
+                    "header": header,
+                    "entries": [{
+                        "header": "",
+                        "detail": f"Total spent for {key_match}: ₹{total:,.2f}"
+                    }]
+                }
+            }
+            resp["chat"] = add_smart_help_tip(resp["chat"], query)
+            return jsonify(resp)
+
+        if m_compare and key_match:
+            tx1 = find_txn_matches_for_period(filtered_tx, key_match, period)
+            tx2 = find_txn_matches_for_period(filtered_tx, key_match, prev_period)
+            total1 = sum(tx.get("Amount", 0) for tx in tx1)
+            total2 = sum(tx.get("Amount", 0) for tx in tx2)
+            diff = total1 - total2
+            trend = "increased" if diff > 0 else "decreased"
+            header = generate_header_from_query(query, key_match)
+            resp = {
+                "chat": {
+                    "header": header,
+                    "entries": [{
+                        "header": "",
+                        "detail": f"Compared to last month, your {key_match} spending {trend} by ₹{abs(diff):,.2f} ({total1:,.2f} vs {total2:,.2f})."
+                    }]
+                }
+            }
+            resp["chat"] = add_smart_help_tip(resp["chat"], query)
+            return jsonify(resp)
+
+        if m_list and key_match:
+            matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
+            entry_list = [{
+                "header": tx.get("Title", "") or tx.get("Transaction", ""),
+                "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date', '')}"
+            } for tx in matches]
+            header = generate_header_from_query(query, key_match)
+            resp = {
+                "chat": {
+                    "header": header,
+                    "entries": entry_list
+                }
+            }
+            resp["chat"] = add_smart_help_tip(resp["chat"], query)
+            return jsonify(resp)
+
+        # Fallback: No match or advice/freeform chat (Send to GPT)
+        expense_summary = group_by_category(filtered_tx, period, 0)
+        income_summary = group_by_category(filtered_tx, period, 1)
+        merchant_summary = group_by_merchant(filtered_tx, period, merchant_category) if merchant_category else group_by_merchant(filtered_tx, period)
+        payment_summary = group_by_payment(filtered_tx, period)
+
+   	expense_summary_prev = group_by_category(filtered_tx_prev, prev_period, 0)
+   	 income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
+    	merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period, merchant_category) if merchant_category else group_by_merchant(filtered_tx_prev, prev_period)
+    	payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
+
+
+
+
+        prompt = f"""
+You are a smart financial chat assistant.
+Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs" or any other currency symbol.
+Use ONLY the provided category/income/merchant/payment summaries for your analysis.
+Never guess or make assumptions. If no matching data exists: return “No data for this period.”
+**For every answer (including category or merchant summaries):**
+- Always respond in this strict format for each entry:
+    - "₹{{amount}} at {{category_or_merchant}} ({{count}} entries)"
+    - or "₹{{amount}} in {{category_or_merchant}} ({{count}} entries)"
+- Never use any other format, never omit the count, and never change the order or words.
+- Do not use commas or other separators in entries, always use the required string above.
+
+category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
+income_summary: {json.dumps(income_summary, separators=(',', ':'))}
+payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
+merchant_summary: {json.dumps(merchant_summary, separators=(',', ':'))}
+category_summary_prev: {json.dumps(expense_summary_prev, separators=(',', ':'))}
+income_summary_prev: {json.dumps(income_summary_prev, separators=(',', ':'))}
+payment_summary_prev: {json.dumps(payment_summary_prev, separators=(',', ':'))}
+merchant_summary_prev: {json.dumps(merchant_summary_prev, separators=(',', ':'))}
+period: {period}
+prev_period: {prev_period}
+budget: {budget}
+days_left: {days_left}
+current_month: {current_month_str}
+query: "{query}"
+
+Output format:
+{{"chat": {{"header": "...", "entries": [...] }}}}
+"""
+        try:
+            chat_completion = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a smart finance assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.65
+            )
+            response_text = chat_completion.choices[0].message.content
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+        response_text = response_text.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:].strip("`").strip()
+        elif response_text.startswith("```"):
+            response_text = response_text[3:].strip("`").strip()
+        try:
+            resp_json = json.loads(response_text)
+        except Exception as e:
+            return jsonify({
+                "parse_error": str(e),
+                "raw_response": response_text
+            }), 500
+
+        def normalize_chat_entries(entries):
+            normalized = []
+            for entry in entries:
+                if isinstance(entry, dict):
+                    if "amount" in entry and "category" in entry:
+                        normalized.append({
+                            "header": entry.get("category", ""),
+                            "detail": entry.get("amount", "")
+                        })
+                    elif "title" in entry and "value" in entry:
+                        value = entry["value"]
+                        if isinstance(value, list):
+                            value = "\n".join(str(v) for v in value)
+                        normalized.append({
+                            "header": entry.get("title", ""),
+                            "detail": value
+                        })
+                    elif "content" in entry:
+                        normalized.append({
+                            "header": entry.get("type", ""),
+                            "detail": entry.get("content", "")
+                        })
+                    elif "detail" in entry and "header" in entry:
+                        normalized.append({
+                            "header": entry.get("header", ""),
+                            "detail": entry.get("detail", "")
+                        })
+                    elif "text" in entry:
+                        normalized.append({
+                            "header": "",
+                            "detail": entry.get("text", "")
+                        })
+                    else:
+                        normalized.append({
+                            "header": "",
+                            "detail": ", ".join(str(v) for v in entry.values())
+                        })
+                else:
+                    normalized.append({
+                        "header": "",
+                        "detail": str(entry)
+                    })
+            return normalized
+
+        if "chat" in resp_json and "entries" in resp_json["chat"]:
+            if not resp_json["chat"].get("header"):
+                resp_json["chat"]["header"] = generate_header_from_query(query)
+            resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
+            resp_json["chat"] = add_smart_help_tip(resp_json["chat"], query)
+        return jsonify(resp_json)
+
+    # ----------- INSIGHT FLOW -----------
     expense_summary = group_by_category(filtered_tx, period, 0)
-    expense_summary_prev = group_by_category(filtered_tx_prev, prev_period, 0)
     income_summary = group_by_category(filtered_tx, period, 1)
-    income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
     merchant_summary = group_by_merchant(filtered_tx, period, merchant_category) if merchant_category else group_by_merchant(filtered_tx, period)
-    merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period, merchant_category) if merchant_category else group_by_merchant(filtered_tx_prev, prev_period)
     payment_summary = group_by_payment(filtered_tx, period)
-    payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
-
-
- 
-
-    m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
-    if m_below:
-        amount_limit = int(m_below.group(2)) if m_below.group(2).isdigit() else 500
-        below_matches = [tx for tx in filtered_tx if tx.get("Amount", 0) < amount_limit]
-        entry_list = [{
-            "header": tx.get("Title", "") or tx.get("Transaction", ""),
-            "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date') or f'Period {tx.get('Period', '')}'}"
-        } for tx in below_matches]
-        resp = {
-            "chat": {
-                "header": f"Transactions Below ₹{amount_limit}",
-                "entries": entry_list if entry_list else [{"header": "", "detail": f"No transactions below ₹{amount_limit} for {period}."}]
-            }
-        }
-        resp["chat"] = add_smart_help_tip(resp["chat"], query)
-        return jsonify(resp)
-
-    m_count = re.search(r"(how many|count|times|number of)\s+(.*?)\s+(buy|bought|order|orders|purchase|purchases|transactions?)", query.lower())
-    m_total = re.search(r"(total|how much|sum|spent)\s+(.*?)\s+(on|for|in)?", query.lower())
-    m_compare = re.search(r"(compare|more|less|difference|trend).*?(this|current)\s*month.*?(last|previous)\s*month", query.lower())
-    m_list = re.search(r"(show|list|all)\s+(.*?)\s+(transactions?|orders?)", query.lower())
-
-    key_match = None
-    if m_count:
-        key_match = m_count.group(2)
-    elif m_total:
-        key_match = m_total.group(2)
-    elif m_list:
-        key_match = m_list.group(2)
-    elif "upi" in query.lower():
-        key_match = "upi"
-    elif "card" in query.lower():
-        key_match = "card"
-    elif "cash" in query.lower():
-        key_match = "cash"
-
-    if m_count and key_match:
-        matches = find_txn_matches_for_period(filtered_tx, key_match, period)
-        header = generate_header_from_query(query, key_match)
-        resp = {
-            "chat": {
-                "header": header,
-                "entries": [{"header": "", "detail": f"You made {len(matches)} {key_match} transactions in {period}."}]
-            }
-        }
-        resp["chat"] = add_smart_help_tip(resp["chat"], query)
-        return jsonify(resp)
-    if m_total and key_match:
-        matches = find_txn_matches_for_period(filtered_tx, key_match, period)
-        total = sum(tx.get("Amount", 0) for tx in matches)
-        header = generate_header_from_query(query, key_match)
-        resp = {
-            "chat": {
-                "header": header,
-                "entries": [{"header": "", "detail": f"Total spent for {key_match}: ₹{total:,.2f}"}]
-            }
-        }
-        resp["chat"] = add_smart_help_tip(resp["chat"], query)
-        return jsonify(resp)
-    if m_compare and key_match:
-        tx1 = find_txn_matches_for_period(filtered_tx, key_match, period)
-        tx2 = find_txn_matches_for_period(filtered_tx_prev, key_match, prev_period)
-        total1 = sum(tx.get("Amount", 0) for tx in tx1)
-        total2 = sum(tx.get("Amount", 0) for tx in tx2)
-        diff = total1 - total2
-        trend = "increased" if diff > 0 else "decreased"
-        header = generate_header_from_query(query, key_match)
-        resp = {
-            "chat": {
-                "header": header,
-                "entries": [{"header": "", "detail": f"Compared to last month, your {key_match} spending {trend} by ₹{abs(diff):,.2f} ({total1:,.2f} vs {total2:,.2f})."}]
-            }
-        }
-        resp["chat"] = add_smart_help_tip(resp["chat"], query)
-        return jsonify(resp)
-    if m_list and key_match:
-        matches = find_txn_matches_for_period(filtered_tx, key_match, period)
-        entry_list = [{
-            "header": tx.get("Title", "") or tx.get("Transaction", ""),
-            "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date', '')}"
-        } for tx in matches]
-        header = generate_header_from_query(query, key_match)
-        resp = {
-            "chat": {
-                "header": header,
-                "entries": entry_list
-            }
-        }
-        resp["chat"] = add_smart_help_tip(resp["chat"], query)
-        return jsonify(resp)
 
     if not filtered_tx or (not expense_summary and not income_summary):
         return jsonify({
@@ -396,29 +396,9 @@ def ai_insight():
             }]
         }), 200
 
-    intent = advanced_intent_detection(query)
-    summary = build_summaries(tx_list, period, prev_period, merchant_category=merchant_category)
-    context = dict(period=period, prev_period=prev_period, budget=budget, days_left=days_left, current_month_str=current_month_str)
-    prompt_blocks = construct_prompt(intent, summary, context)
-
-    data_block = f"""
-category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
-income_summary: {json.dumps(income_summary, separators=(',', ':'))}
-payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
-merchant_summary: {json.dumps(merchant_summary, separators=(',', ':'))}
-"""
-    if comparison_mode:
-        data_block += f"""
-category_summary_prev: {json.dumps(expense_summary_prev, separators=(',', ':'))}
-income_summary_prev: {json.dumps(income_summary_prev, separators=(',', ':'))}
-payment_summary_prev: {json.dumps(payment_summary_prev, separators=(',', ':'))}
-merchant_summary_prev: {json.dumps(merchant_summary_prev, separators=(',', ':'))}
-"""
-
     prompt = f"""
 You are a finance insight assistant for a personal expense tracker.
-- Only use the provided summaries/data blocks for your analysis.
-- Never recalculate totals or counts from raw transactions.
+
 - Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs", or any other currency symbol.
 - Never recalculate totals or counts from raw transactions. Use ONLY the provided summaries below for your analysis.
 - For Payment Method, use payment_summary. For Merchant-Insights, use merchant_summary for the specified category.
@@ -431,48 +411,73 @@ You are a finance insight assistant for a personal expense tracker.
     - Use “entries” (plural) unless count == 1.
     - **No section, suggestion, trend, or alert is valid without this format.**
 
-- Every section, suggestion, or trend MUST use this format for all amounts: “₹{{amt}} at {{category}} ({{count}} entries)” or “₹{{amt}} in {{category}} ({{count}} entries)”.
-- Entries must be plural unless count == 1.
-- Include at least 4-5 Smart Suggestions (invent if needed, even subtle patterns!).
-- At least 2-3 Optional Trends/Alerts.
-- Make comparisons, forecasts, or anomaly insights if data or query asks for it.
+- **Smart Suggestions and all advice must be:**
+    - Positive, user-friendly, and always suggest a simple next step or a small “win”
+    - Brief (1–2 sentences only), never generic or negative
+    - Always framed in an encouraging way, e.g. “Great job…” “Consider…” “Try…”
+    - Never use language like “cut down,” “reduce,” “avoid”—instead use positive suggestions (“Explore”, “Enjoy”, “Consider optimizing”, “Keep it up!”)
+
+- **Category Comparison with previous period:**
+    - Always state if this month is higher/lower than last month in **percentage (%)** terms.
+    - Mention both amount and count for each period.
+    - Example:  
+      “Home Expense is 23% higher this month (₹2710.16 vs ₹2200, 20 entries vs 18). Well done keeping your spending focused.”
+
 - Never repeat or duplicate insights in this period.
-- If you do not find enough real insights, create actionable ideas or patterns based on available summaries.
 
-**Extra insights/trends to always consider/invent if data is available:**
-- Spending Habit Alerts (frequent, time-of-day, or day-of-week patterns)
-- Avoidable Spending Suggestions (e.g., eating out, subscriptions, non-essential purchases)
-- Recurring Micro-Spends
-- Biggest Single Transactions
-- Spending Control Encouragement
-- Expense Density Map
-- Transaction Frequency
-- Category Neglect or Rebound
-- Irregular Core Spending (dips/spikes)
-- Repeated Merchant Spend
-- Unusual/Anomaly Alerts
-- Predictions/Forecasts if relevant
-- And any other interesting, positive, actionable patterns you notice in the summaries!
+- **Section logic:**
+    - Only show Forecast, Savings Trend, Saving Tip if period == current month ({current_month_str}).
+    - High Spend must always use the required format.
+    - Merchant-Insights must use merchant_summary if present.
+    - Remaining Budget must always state budget left in rupees and how much spent.
+    - Category Comparison must compare with previous period (if available) and mention categories and counts in format, always using % higher/lower language.
+    - All sections and suggestions must always state data in the specified format (no exceptions).
 
-
-{prompt_blocks}
+Data available to you:
+category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
+income_summary: {json.dumps(income_summary, separators=(',', ':'))}
+payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
+merchant_summary: {json.dumps(merchant_summary, separators=(',', ':'))}
+period: {period}
+prev_period: {prev_period}
+budget: {budget}
+days_left: {days_left}
+current_month: {current_month_str}
 
 Required insight_groups (include only if relevant data is available):
 - Summary (Spending Behavior)
 - Income vs Expense
-- Expense Comparison (Only if both periods have matching data)
+- Budget Alert/Remaining
+- Unusual/Anomaly Alerts
+- Predictions/Forecasts if relevant (if current month = period)
+- Saving Tip (if current month = period)
 - Cash Flow
-- High Spend (Top 3 categories by amount)
+- Expense Comparison (Only if both periods have matching data)
+- Spending Pattern Insights Comparison
+- High Spend Category (Top 3 categories by amount)
 - Category Comparison with previous period
 - Merchant-Insights (for the specified category, use merchant_summary)
+- Repeated Merchant Spend
+- Avoidable Spending Suggestions 
+- Transaction Frequency
+- Recurring Micro-Spends
+- Spending Control Encouragement
+- Expense Density Map
+- Recurring Bills 
+- Breakdown & Awareness Insights
+- Progress / Goal-Oriented Insights
 - At least 4-5 Smart Suggestions (each with category, amount, and count)
 - 2-3 Optional trends/alerts (including from above or invented)
-- Saving Tip (if current month = period)
-- Savings Trend (if current month = period)
-- Remaining Budget
-- Forecast (if current month = period)
-"""
 
+
+Respond in this JSON format:
+{{
+  "insight_groups": [
+    {{"header": "...", "detail": "...", "type": "...", "category": "...", "transactions":[]}},
+    ...
+  ]
+}}
+"""
     try:
         chat_completion = client.chat.completions.create(
             model="gpt-4o",
@@ -494,61 +499,19 @@ Required insight_groups (include only if relevant data is available):
 
     try:
         resp_json = json.loads(response_text)
+        if not resp_json or ("insight_groups" in resp_json and not resp_json["insight_groups"]):
+            raise ValueError("No insight_groups or null received")
     except Exception as e:
         return jsonify({
-            "parse_error": str(e),
-            "raw_response": response_text
-        }), 500
+            "insight_groups": [{
+                "header": "No Data",
+                "detail": "No valid insight found. Please try again later.",
+                "type": "empty",
+                "category": "None",
+                "transactions": []
+            }]
+        }), 200
 
-    def normalize_chat_entries(entries):
-        normalized = []
-        for entry in entries:
-            if isinstance(entry, dict):
-                if "amount" in entry and "category" in entry:
-                    normalized.append({
-                        "header": entry.get("category", ""),
-                        "detail": entry.get("amount", "")
-                    })
-                elif "title" in entry and "value" in entry:
-                    value = entry["value"]
-                    if isinstance(value, list):
-                        value = "\n".join(str(v) for v in value)
-                    normalized.append({
-                        "header": entry.get("title", ""),
-                        "detail": value
-                    })
-                elif "content" in entry:
-                    normalized.append({
-                        "header": entry.get("type", ""),
-                        "detail": entry.get("content", "")
-                    })
-                elif "detail" in entry and "header" in entry:
-                    normalized.append({
-                        "header": entry.get("header", ""),
-                        "detail": entry.get("detail", "")
-                    })
-                elif "text" in entry:
-                    normalized.append({
-                        "header": "",
-                        "detail": entry.get("text", "")
-                    })
-                else:
-                    normalized.append({
-                        "header": "",
-                        "detail": ", ".join(str(v) for v in entry.values())
-                    })
-            else:
-                normalized.append({
-                    "header": "",
-                    "detail": str(entry)
-                })
-        return normalized
-
-    if "chat" in resp_json and "entries" in resp_json["chat"]:
-        if not resp_json["chat"].get("header"):
-            resp_json["chat"]["header"] = generate_header_from_query(query)
-        resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
-        resp_json["chat"] = add_smart_help_tip(resp_json["chat"], query)
     return jsonify(resp_json)
 
 if __name__ == '__main__':
