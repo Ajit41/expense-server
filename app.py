@@ -284,82 +284,84 @@ Respond in this JSON format:
 }}
 """
 
-            chat_completion = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "You are a smart finance assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.65
-            )
-            response_text = chat_completion.choices[0].message.content
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+   try:
+    chat_completion = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a smart finance assistant."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.65
+    )
+    response_text = chat_completion.choices[0].message.content
+except Exception as e:
+    return jsonify({"error": str(e)}), 500
 
-        response_text = response_text.strip()
-        if response_text.startswith("```json"):
-            response_text = response_text[7:].strip("`").strip()
-        elif response_text.startswith("```"):
-            response_text = response_text[3:].strip("`").strip()
+response_text = response_text.strip()
+if response_text.startswith("```json"):
+    response_text = response_text[7:].strip("`").strip()
+elif response_text.startswith("```"):
+    response_text = response_text[3:].strip("`").strip()
 
-        try:
-            resp_json = json.loads(response_text)
-        except Exception as e:
-            return jsonify({
-                "parse_error": str(e),
-                "raw_response": response_text
-            }), 500
+try:
+    resp_json = json.loads(response_text)
+except Exception as e:
+    return jsonify({
+        "parse_error": str(e),
+        "raw_response": response_text
+    }), 500
 
-        def normalize_chat_entries(entries):
-            normalized = []
-            for entry in entries:
-                if isinstance(entry, dict):
-                    if "amount" in entry and "category" in entry:
-                        normalized.append({
-                            "header": entry.get("category", ""),
-                            "detail": entry.get("amount", "")
-                        })
-                    elif "title" in entry and "value" in entry:
-                        value = entry["value"]
-                        if isinstance(value, list):
-                            value = "\n".join(str(v) for v in value)
-                        normalized.append({
-                            "header": entry.get("title", ""),
-                            "detail": value
-                        })
-                    elif "content" in entry:
-                        normalized.append({
-                            "header": entry.get("type", ""),
-                            "detail": entry.get("content", "")
-                        })
-                    elif "detail" in entry and "header" in entry:
-                        normalized.append({
-                            "header": entry.get("header", ""),
-                            "detail": entry.get("detail", "")
-                        })
-                    elif "text" in entry:
-                        normalized.append({
-                            "header": "",
-                            "detail": entry.get("text", "")
-                        })
-                    else:
-                        normalized.append({
-                            "header": "",
-                            "detail": ", ".join(str(v) for v in entry.values())
-                        })
-                else:
-                    normalized.append({
-                        "header": "",
-                        "detail": str(entry)
-                    })
-            return normalized
+def normalize_chat_entries(entries):
+    normalized = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            if "amount" in entry and "category" in entry:
+                normalized.append({
+                    "header": entry.get("category", ""),
+                    "detail": entry.get("amount", "")
+                })
+            elif "title" in entry and "value" in entry:
+                value = entry["value"]
+                if isinstance(value, list):
+                    value = "\n".join(str(v) for v in value)
+                normalized.append({
+                    "header": entry.get("title", ""),
+                    "detail": value
+                })
+            elif "content" in entry:
+                normalized.append({
+                    "header": entry.get("type", ""),
+                    "detail": entry.get("content", "")
+                })
+            elif "detail" in entry and "header" in entry:
+                normalized.append({
+                    "header": entry.get("header", ""),
+                    "detail": entry.get("detail", "")
+                })
+            elif "text" in entry:
+                normalized.append({
+                    "header": "",
+                    "detail": entry.get("text", "")
+                })
+            else:
+                normalized.append({
+                    "header": "",
+                    "detail": ", ".join(str(v) for v in entry.values())
+                })
+        else:
+            normalized.append({
+                "header": "",
+                "detail": str(entry)
+            })
+    return normalized
 
-        if "chat" in resp_json and "entries" in resp_json["chat"]:
-            if not resp_json["chat"].get("header"):
-                resp_json["chat"]["header"] = generate_header_from_query(query)
-            resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
-            resp_json["chat"] = add_smart_help_tip(resp_json["chat"], query)
-        return jsonify(resp_json)
+if "chat" in resp_json and "entries" in resp_json["chat"]:
+    if not resp_json["chat"].get("header"):
+        resp_json["chat"]["header"] = generate_header_from_query(query)
+    resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
+    resp_json["chat"] = add_smart_help_tip(resp_json["chat"], query)
+return jsonify(resp_json)
+
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
