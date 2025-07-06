@@ -44,9 +44,12 @@ def group_by_category(tx_list, period, type_value):
                 found["count"] += 1
             else:
                 summary.append({"category": cat, "amount": amt, "count": 1})
-    for item in summary:
-        item["amount"] = f"₹{item['amount']:.2f}"
     return summary
+
+def format_category_summary(summary):
+    return [
+        {**item, "amount": f"₹{item['amount']:.2f}"} for item in summary
+    ]
 
 def group_by_merchant(tx_list, period, merchant_category=None):
     merchants = {}
@@ -62,11 +65,12 @@ def group_by_merchant(tx_list, period, merchant_category=None):
                 merchants[m]["count"] += 1
             else:
                 merchants[m] = {"merchant": m, "amount": amt, "count": 1}
-    out = []
-    for m in merchants.values():
-        m["amount"] = f"₹{m['amount']:.2f}"
-        out.append(m)
-    return out
+    return list(merchants.values())
+
+def format_merchant_summary(summary):
+    return [
+        {**item, "amount": f"₹{item['amount']:.2f}"} for item in summary
+    ]
 
 def group_by_payment(tx_list, period):
     summary = {}
@@ -76,8 +80,13 @@ def group_by_payment(tx_list, period):
             amt = tx.get("Amount", 0)
             summary.setdefault(method, 0)
             summary[method] += amt
-    out = [{"method": k, "amount": f"₹{v:.2f}"} for k, v in summary.items()]
-    return out
+    return [{"method": k, "amount": v} for k, v in summary.items()]
+
+def format_payment_summary(summary):
+    return [
+        {**item, "amount": f"₹{item['amount']:.2f}" if isinstance(item['amount'], (int, float)) else str(item['amount'])}
+        for item in summary
+    ]
 
 def generate_header_from_query(q, key_match=None):
     q_lower = q.lower()
@@ -153,6 +162,21 @@ def ai_insight():
     income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
     merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period)
     payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
+
+    # Debugging: print your raw and total expense
+    print("DEBUG | period:", period)
+    print("DEBUG | expense_summary (raw):", expense_summary)
+    print("DEBUG | total_expense (Type 0):", sum(item['amount'] for item in expense_summary))
+
+    # Format only for prompt
+    expense_summary_fmt = format_category_summary(expense_summary)
+    expense_summary_prev_fmt = format_category_summary(expense_summary_prev)
+    income_summary_fmt = format_category_summary(income_summary)
+    income_summary_prev_fmt = format_category_summary(income_summary_prev)
+    merchant_summary_fmt = format_merchant_summary(merchant_summary)
+    merchant_summary_prev_fmt = format_merchant_summary(merchant_summary_prev)
+    payment_summary_fmt = format_payment_summary(payment_summary)
+    payment_summary_prev_fmt = format_payment_summary(payment_summary_prev)
 
     # --- PATTERN-BASED QUICK CHAT LOGIC (for microspends, quick Q&A) ---
     m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
@@ -236,20 +260,20 @@ days_left: {days_left}
 current_month: {current_month_str}
 
 # EXPENSE
-category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
-category_summary_prev: {json.dumps(expense_summary_prev, separators=(',', ':'))}
+category_summary: {json.dumps(expense_summary_fmt, separators=(',', ':'))}
+category_summary_prev: {json.dumps(expense_summary_prev_fmt, separators=(',', ':'))}
 
 # INCOME
-income_summary: {json.dumps(income_summary, separators=(',', ':'))}
-income_summary_prev: {json.dumps(income_summary_prev, separators=(',', ':'))}
+income_summary: {json.dumps(income_summary_fmt, separators=(',', ':'))}
+income_summary_prev: {json.dumps(income_summary_prev_fmt, separators=(',', ':'))}
 
 # MERCHANT
-merchant_summary: {json.dumps(merchant_summary, separators=(',', ':'))}
-merchant_summary_prev: {json.dumps(merchant_summary_prev, separators=(',', ':'))}
+merchant_summary: {json.dumps(merchant_summary_fmt, separators=(',', ':'))}
+merchant_summary_prev: {json.dumps(merchant_summary_prev_fmt, separators=(',', ':'))}
 
 # PAYMENT
-payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
-payment_summary_prev: {json.dumps(payment_summary_prev, separators=(',', ':'))}
+payment_summary: {json.dumps(payment_summary_fmt, separators=(',', ':'))}
+payment_summary_prev: {json.dumps(payment_summary_prev_fmt, separators=(',', ':'))}
 
 Respond in this JSON format:
 {{
@@ -260,41 +284,82 @@ Respond in this JSON format:
 }}
 """
 
-    try:
-        chat_completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "You are a smart finance assistant."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.65
-        )
-        response_text = chat_completion.choices[0].message.content
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            chat_completion = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are a smart finance assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.65
+            )
+            response_text = chat_completion.choices[0].message.content
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
-    response_text = response_text.strip()
-    if response_text.startswith("```json"):
-        response_text = response_text[7:].strip("`").strip()
-    elif response_text.startswith("```"):
-        response_text = response_text[3:].strip("`").strip()
+        response_text = response_text.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:].strip("`").strip()
+        elif response_text.startswith("```"):
+            response_text = response_text[3:].strip("`").strip()
 
-    try:
-        resp_json = json.loads(response_text)
-        if not resp_json or ("insight_groups" in resp_json and not resp_json["insight_groups"]):
-            raise ValueError("No insight_groups or null received")
-    except Exception as e:
-        return jsonify({
-            "insight_groups": [{
-                "header": "No Data",
-                "detail": "No valid insight found. Please try again later.",
-                "type": "empty",
-                "category": "None",
-                "transactions": []
-            }]
-        }), 200
+        try:
+            resp_json = json.loads(response_text)
+        except Exception as e:
+            return jsonify({
+                "parse_error": str(e),
+                "raw_response": response_text
+            }), 500
 
-    return jsonify(resp_json)
+        def normalize_chat_entries(entries):
+            normalized = []
+            for entry in entries:
+                if isinstance(entry, dict):
+                    if "amount" in entry and "category" in entry:
+                        normalized.append({
+                            "header": entry.get("category", ""),
+                            "detail": entry.get("amount", "")
+                        })
+                    elif "title" in entry and "value" in entry:
+                        value = entry["value"]
+                        if isinstance(value, list):
+                            value = "\n".join(str(v) for v in value)
+                        normalized.append({
+                            "header": entry.get("title", ""),
+                            "detail": value
+                        })
+                    elif "content" in entry:
+                        normalized.append({
+                            "header": entry.get("type", ""),
+                            "detail": entry.get("content", "")
+                        })
+                    elif "detail" in entry and "header" in entry:
+                        normalized.append({
+                            "header": entry.get("header", ""),
+                            "detail": entry.get("detail", "")
+                        })
+                    elif "text" in entry:
+                        normalized.append({
+                            "header": "",
+                            "detail": entry.get("text", "")
+                        })
+                    else:
+                        normalized.append({
+                            "header": "",
+                            "detail": ", ".join(str(v) for v in entry.values())
+                        })
+                else:
+                    normalized.append({
+                        "header": "",
+                        "detail": str(entry)
+                    })
+            return normalized
+
+        if "chat" in resp_json and "entries" in resp_json["chat"]:
+            if not resp_json["chat"].get("header"):
+                resp_json["chat"]["header"] = generate_header_from_query(query)
+            resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
+            resp_json["chat"] = add_smart_help_tip(resp_json["chat"], query)
+        return jsonify(resp_json)
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
