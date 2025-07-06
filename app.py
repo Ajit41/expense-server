@@ -291,13 +291,7 @@ def ai_insight():
     payment_summary = group_by_payment(filtered_tx, period)
     payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
 
-    # --- Compose insights
-    insight_groups = []
-    insight_groups.append(get_month_on_month_comparison(expense_summary, expense_summary_prev, period, prev_period))
-    insight_groups.append(get_budget_progress_summary(expense_summary, budget, period))
-    insight_groups.append(get_biggest_transactions(tx_list, period, top_n=3))
 
-    return jsonify({"insight_groups": insight_groups})
  
 
     m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
