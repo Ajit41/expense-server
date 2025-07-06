@@ -106,7 +106,6 @@ def add_smart_help_tip(chat_response, user_query):
         return chat_response
     q = user_query.lower()
     help_tip = None
-
     if any(kw in q for kw in ["payee", "person", "who", "to whom"]):
         help_tip = "Tip: For transaction details, tap the payee in the Reports page for a full breakdown."
     elif any(kw in q for kw in ["date wise", "by date", "datewise", "on which date", "all transactions", "each day"]):
@@ -140,11 +139,22 @@ def ai_insight():
     days_left = data.get("days_left", 0)
     current_month_str = datetime.now().strftime("%Y%m")
 
+    # Filter transactions by period and prev_period
     filtered_tx = [tx for tx in tx_list if tx.get("Period") == period]
-    filtered_tx = filtered_tx[:1000]
     filtered_tx_prev = [tx for tx in tx_list if tx.get("Period") == prev_period]
 
-    # ---- CHAT-STYLE QUERY HANDLING ----
+    # Always build all summaries (expense=type0, income=type1)
+    expense_summary = group_by_category(filtered_tx, period, 0)
+    income_summary = group_by_category(filtered_tx, period, 1)
+    merchant_summary = group_by_merchant(filtered_tx, period)
+    payment_summary = group_by_payment(filtered_tx, period)
+
+    expense_summary_prev = group_by_category(filtered_tx_prev, prev_period, 0)
+    income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
+    merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period)
+    payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
+
+    # --- PATTERN-BASED QUICK CHAT LOGIC (for microspends, quick Q&A) ---
     m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
     if m_below:
         amount_limit = int(m_below.group(2)) if m_below.group(2).isdigit() else 500
@@ -162,227 +172,9 @@ def ai_insight():
         resp["chat"] = add_smart_help_tip(resp["chat"], query)
         return jsonify(resp)
 
-    if query:
-        query_lower = query.lower()
-        target_period = period
-        compare_period = None
-        if "last month" in query_lower or "previous month" in query_lower:
-            compare_period = get_prev_period(period)
-        if "this month" in query_lower or "current month" in query_lower:
-            target_period = period
-        elif "last month" in query_lower:
-            target_period = get_prev_period(period)
+    # More chat patterns can go here (m_count, m_total, m_compare...)
 
-        m_count = re.search(r"(how many|count|times|number of)\s+(.*?)\s+(buy|bought|order|orders|purchase|purchases|transactions?)", query_lower)
-        m_total = re.search(r"(total|how much|sum|spent)\s+(.*?)\s+(on|for|in)?", query_lower)
-        m_compare = re.search(r"(compare|more|less|difference|trend).*?(this|current)\s*month.*?(last|previous)\s*month", query_lower)
-        m_list = re.search(r"(show|list|all)\s+(.*?)\s+(transactions?|orders?)", query_lower)
-
-        key_match = None
-        if m_count:
-            key_match = m_count.group(2)
-        elif m_total:
-            key_match = m_total.group(2)
-        elif m_list:
-            key_match = m_list.group(2)
-        elif "upi" in query_lower:
-            key_match = "upi"
-        elif "card" in query_lower:
-            key_match = "card"
-        elif "cash" in query_lower:
-            key_match = "cash"
-
-        if m_count and key_match:
-            matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
-            header = generate_header_from_query(query, key_match)
-            resp = {
-                "chat": {
-                    "header": header,
-                    "entries": [{
-                        "header": "",
-                        "detail": f"You made {len(matches)} {key_match} transactions in {target_period}."
-                    }]
-                }
-            }
-            resp["chat"] = add_smart_help_tip(resp["chat"], query)
-            return jsonify(resp)
-
-        if m_total and key_match:
-            matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
-            total = sum(tx.get("Amount", 0) for tx in matches)
-            header = generate_header_from_query(query, key_match)
-            resp = {
-                "chat": {
-                    "header": header,
-                    "entries": [{
-                        "header": "",
-                        "detail": f"Total spent for {key_match}: ₹{total:,.2f}"
-                    }]
-                }
-            }
-            resp["chat"] = add_smart_help_tip(resp["chat"], query)
-            return jsonify(resp)
-
-        if m_compare and key_match:
-            tx1 = find_txn_matches_for_period(filtered_tx, key_match, period)
-            tx2 = find_txn_matches_for_period(filtered_tx, key_match, prev_period)
-            total1 = sum(tx.get("Amount", 0) for tx in tx1)
-            total2 = sum(tx.get("Amount", 0) for tx in tx2)
-            diff = total1 - total2
-            trend = "increased" if diff > 0 else "decreased"
-            header = generate_header_from_query(query, key_match)
-            resp = {
-                "chat": {
-                    "header": header,
-                    "entries": [{
-                        "header": "",
-                        "detail": f"Compared to last month, your {key_match} spending {trend} by ₹{abs(diff):,.2f} ({total1:,.2f} vs {total2:,.2f})."
-                    }]
-                }
-            }
-            resp["chat"] = add_smart_help_tip(resp["chat"], query)
-            return jsonify(resp)
-
-        if m_list and key_match:
-            matches = find_txn_matches_for_period(filtered_tx, key_match, target_period)
-            entry_list = [{
-                "header": tx.get("Title", "") or tx.get("Transaction", ""),
-                "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date', '')}"
-            } for tx in matches]
-            header = generate_header_from_query(query, key_match)
-            resp = {
-                "chat": {
-                    "header": header,
-                    "entries": entry_list
-                }
-            }
-            resp["chat"] = add_smart_help_tip(resp["chat"], query)
-            return jsonify(resp)
-
-        # Fallback: No match or advice/freeform chat (Send to GPT)
-        expense_summary = group_by_category(filtered_tx, period, 0)
-        income_summary = group_by_category(filtered_tx, period, 1)
-        merchant_summary = group_by_merchant(filtered_tx, period, merchant_category) if merchant_category else group_by_merchant(filtered_tx, period)
-        payment_summary = group_by_payment(filtered_tx, period)
-
-        expense_summary_prev = group_by_category(filtered_tx_prev, prev_period, 0)
-        income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
-        merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period, merchant_category) if merchant_category else group_by_merchant(filtered_tx_prev, prev_period)
-        payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
-
-        prompt = f"""
-You are a smart financial chat assistant.
-Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs" or any other currency symbol.
-Use ONLY the provided category/income/merchant/payment summaries for your analysis.
-Never guess or make assumptions. If no matching data exists: return “No data for this period.”
-**For every answer (including category or merchant summaries):**
-- Always respond in this strict format for each entry:
-    - "₹{{amount}} at {{category_or_merchant}} ({{count}} entries)"
-    - or "₹{{amount}} in {{category_or_merchant}} ({{count}} entries)"
-- Never use any other format, never omit the count, and never change the order or words.
-- Do not use commas or other separators in entries, always use the required string above.
-
-category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
-income_summary: {json.dumps(income_summary, separators=(',', ':'))}
-payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
-merchant_summary: {json.dumps(merchant_summary, separators=(',', ':'))}
-category_summary_prev: {json.dumps(expense_summary_prev, separators=(',', ':'))}
-income_summary_prev: {json.dumps(income_summary_prev, separators=(',', ':'))}
-payment_summary_prev: {json.dumps(payment_summary_prev, separators=(',', ':'))}
-merchant_summary_prev: {json.dumps(merchant_summary_prev, separators=(',', ':'))}
-period: {period}
-prev_period: {prev_period}
-budget: {budget}
-days_left: {days_left}
-current_month: {current_month_str}
-query: "{query}"
-
-Output format:
-{{"chat": {{"header": "...", "entries": [...] }}}}
-"""
-        try:
-            chat_completion = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": "You are a smart finance assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.65
-            )
-            response_text = chat_completion.choices[0].message.content
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-
-        response_text = response_text.strip()
-        if response_text.startswith("```json"):
-            response_text = response_text[7:].strip("`").strip()
-        elif response_text.startswith("```"):
-            response_text = response_text[3:].strip("`").strip()
-        try:
-            resp_json = json.loads(response_text)
-        except Exception as e:
-            return jsonify({
-                "parse_error": str(e),
-                "raw_response": response_text
-            }), 500
-
-        def normalize_chat_entries(entries):
-            normalized = []
-            for entry in entries:
-                if isinstance(entry, dict):
-                    if "amount" in entry and "category" in entry:
-                        normalized.append({
-                            "header": entry.get("category", ""),
-                            "detail": entry.get("amount", "")
-                        })
-                    elif "title" in entry and "value" in entry:
-                        value = entry["value"]
-                        if isinstance(value, list):
-                            value = "\n".join(str(v) for v in value)
-                        normalized.append({
-                            "header": entry.get("title", ""),
-                            "detail": value
-                        })
-                    elif "content" in entry:
-                        normalized.append({
-                            "header": entry.get("type", ""),
-                            "detail": entry.get("content", "")
-                        })
-                    elif "detail" in entry and "header" in entry:
-                        normalized.append({
-                            "header": entry.get("header", ""),
-                            "detail": entry.get("detail", "")
-                        })
-                    elif "text" in entry:
-                        normalized.append({
-                            "header": "",
-                            "detail": entry.get("text", "")
-                        })
-                    else:
-                        normalized.append({
-                            "header": "",
-                            "detail": ", ".join(str(v) for v in entry.values())
-                        })
-                else:
-                    normalized.append({
-                        "header": "",
-                        "detail": str(entry)
-                    })
-            return normalized
-
-        if "chat" in resp_json and "entries" in resp_json["chat"]:
-            if not resp_json["chat"].get("header"):
-                resp_json["chat"]["header"] = generate_header_from_query(query)
-            resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
-            resp_json["chat"] = add_smart_help_tip(resp_json["chat"], query)
-        return jsonify(resp_json)
-
-    # ----------- INSIGHT FLOW -----------
-    expense_summary = group_by_category(filtered_tx, period, 0)
-    income_summary = group_by_category(filtered_tx, period, 1)
-    merchant_summary = group_by_merchant(filtered_tx, period, merchant_category) if merchant_category else group_by_merchant(filtered_tx, period)
-    payment_summary = group_by_payment(filtered_tx, period)
-
+    # ---- INSIGHT FLOW ----
     if not filtered_tx or (not expense_summary and not income_summary):
         return jsonify({
             "insight_groups": [{
@@ -394,58 +186,26 @@ Output format:
             }]
         }), 200
 
+    # --- Prompt for GPT-4o ---
     prompt = f"""
 You are a finance insight assistant for a personal expense tracker.
 
-- Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs", or any other currency symbol.
+- Only use the provided summaries/data blocks for your analysis.
 - Never recalculate totals or counts from raw transactions. Use ONLY the provided summaries below for your analysis.
-- For Payment Method, use payment_summary. For Merchant-Insights, use merchant_summary for the specified category.
+- Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs", or any other currency symbol.
 
-- For every section, smart suggestion, notable trend, alert, or data point (including “small writing” and optional/creative insights):
-    - **You MUST always use this format for every value:**  
-      “₹{{amt}} at {{category}} ({{count}} entries)”  
-      or  
-      “₹{{amt}} in {{category}} ({{count}} entries)”
-    - Use “entries” (plural) unless count == 1.
-    - **No section, suggestion, trend, or alert is valid without this format.**
-
-- **Smart Suggestions and all advice must be:**
-    - Positive, user-friendly, and always suggest a simple next step or a small “win”
-    - Brief (1–2 sentences only), never generic or negative
-    - Always framed in an encouraging way, e.g. “Great job…” “Consider…” “Try…”
-    - Never use language like “cut down,” “reduce,” “avoid”—instead use positive suggestions (“Explore”, “Enjoy”, “Consider optimizing”, “Keep it up!”)
-
-- **Category Comparison with previous period:**
-    - Always state if this month is higher/lower than last month in **percentage (%)** terms.
-    - Mention both amount and count for each period.
-    - Example:  
-      “Home Expense is 23% higher this month (₹2710.16 vs ₹2200, 20 entries vs 18). Well done keeping your spending focused.”
-
-- Never repeat or duplicate insights in this period.
-
-- **Section logic:**
-    - Only show Forecast, Savings Trend, Saving Tip if period == current month ({current_month_str}).
-    - High Spend must always use the required format.
-    - Merchant-Insights must use merchant_summary if present.
-    - Remaining Budget must always state budget left in rupees and how much spent.
-    - Category Comparison must compare with previous period (if available) and mention categories and counts in format, always using % higher/lower language.
-    - All sections and suggestions must always state data in the specified format (no exceptions).
-
-Data available to you:
-category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
-income_summary: {json.dumps(income_summary, separators=(',', ':'))}
-payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
-merchant_summary: {json.dumps(merchant_summary, separators=(',', ':'))}
-period: {period}
-prev_period: {prev_period}
-budget: {budget}
-days_left: {days_left}
-current_month: {current_month_str}
+For every section, smart suggestion, notable trend, alert, or data point (including “small writing” and optional/creative insights):
+- **You MUST always use this format for every value:**
+  “₹{{amt}} at {{category}} ({{count}} entries)”  
+  or  
+  “₹{{amt}} in {{category}} ({{count}} entries)”
+- Use “entries” (plural) unless count == 1.
+- **No section, suggestion, trend, or alert is valid without this format.**
 
 Required insight_groups (include only if relevant data is available):
 - Summary (Spending Behavior)
 - Income vs Expense
-- Budget Alert/Remaining
+- Budget Alert/Remaining (if current month = period)
 - Unusual/Anomaly Alerts
 - Predictions/Forecasts if relevant (if current month = period)
 - Saving Tip (if current month = period)
@@ -453,6 +213,7 @@ Required insight_groups (include only if relevant data is available):
 - Expense Comparison (Only if both periods have matching data)
 - Spending Pattern Insights Comparison
 - High Spend Category (Top 3 categories by amount)
+- Biggest Single Transactions (Top 3 by amount, include details)
 - Category Comparison with previous period
 - Merchant-Insights (for the specified category, use merchant_summary)
 - Repeated Merchant Spend
@@ -467,6 +228,29 @@ Required insight_groups (include only if relevant data is available):
 - At least 4-5 Smart Suggestions (each with category, amount, and count)
 - 2-3 Optional trends/alerts (including from above or invented)
 
+Data available to you:
+period: {period}
+prev_period: {prev_period}
+budget: {budget}
+days_left: {days_left}
+current_month: {current_month_str}
+
+# EXPENSE
+category_summary: {json.dumps(expense_summary, separators=(',', ':'))}
+category_summary_prev: {json.dumps(expense_summary_prev, separators=(',', ':'))}
+
+# INCOME
+income_summary: {json.dumps(income_summary, separators=(',', ':'))}
+income_summary_prev: {json.dumps(income_summary_prev, separators=(',', ':'))}
+
+# MERCHANT
+merchant_summary: {json.dumps(merchant_summary, separators=(',', ':'))}
+merchant_summary_prev: {json.dumps(merchant_summary_prev, separators=(',', ':'))}
+
+# PAYMENT
+payment_summary: {json.dumps(payment_summary, separators=(',', ':'))}
+payment_summary_prev: {json.dumps(payment_summary_prev, separators=(',', ':'))}
+
 Respond in this JSON format:
 {{
   "insight_groups": [
@@ -475,6 +259,7 @@ Respond in this JSON format:
   ]
 }}
 """
+
     try:
         chat_completion = client.chat.completions.create(
             model="gpt-4o",
