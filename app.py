@@ -80,7 +80,6 @@ def group_by_payment(tx_list, period):
     return out
 
 def generate_header_from_query(q, key_match=None):
-    """Make header from user's intent and matched keyword."""
     q_lower = q.lower()
     if key_match:
         if any(word in q_lower for word in ["how much", "total", "spent", "cost"]):
@@ -103,7 +102,6 @@ def generate_header_from_query(q, key_match=None):
     return q.strip().capitalize()[:40] or "Chat Query"
 
 def add_smart_help_tip(chat_response, user_query):
-    """Appends a friendly tip based on query intent if not already a detailed breakdown."""
     if not chat_response or "entries" not in chat_response:
         return chat_response
     q = user_query.lower()
@@ -126,42 +124,43 @@ def add_smart_help_tip(chat_response, user_query):
     if help_tip and not detailed:
         entries.append({"header": "", "detail": help_tip})
     return chat_response
-m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
-if m_below:
-    amount_limit = int(m_below.group(2)) if m_below.group(2).isdigit() else 500
-    matches = [tx for tx in filtered_tx if tx.get("Amount", 0) < amount_limit]
-    entry_list = [{
-        "header": tx.get("Title", "") or tx.get("Transaction", ""),
-        "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date') or f'Period {tx.get('Period', '')}'}"
-    } for tx in matches]
-    resp = {
-        "chat": {
-            "header": f"Transactions Below ₹{amount_limit}",
-            "entries": entry_list if entry_list else [{"header": "", "detail": f"No transactions below ₹{amount_limit} for {period}."}]
-        }
-    }
-    resp["chat"] = add_smart_help_tip(resp["chat"], query)
-    return jsonify(resp)
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
-    data        = request.get_json()
-    tx_list     = data.get("transactions", [])
-    period      = data.get("period", "")
+    data = request.get_json()
+    tx_list = data.get("transactions", [])
+    period = data.get("period", "")
     merchant_category = data.get("merchant_category")
     if not period:
         return jsonify({"error": "Missing required field: period"}), 400
 
     prev_period = get_prev_period(period)
-    query       = (data.get("query", "") or "").strip()
-    budget      = data.get("budget", 0)
-    days_left   = data.get("days_left", 0)
+    query = (data.get("query", "") or "").strip()
+    budget = data.get("budget", 0)
+    days_left = data.get("days_left", 0)
     current_month_str = datetime.now().strftime("%Y%m")
 
-    # Always filter and build everything; select what you need later
     filtered_tx = [tx for tx in tx_list if tx.get("Period") == period]
     filtered_tx = filtered_tx[:1000]
     filtered_tx_prev = [tx for tx in tx_list if tx.get("Period") == prev_period]
+
+    # ---- CHAT-STYLE QUERY HANDLING ----
+    m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
+    if m_below:
+        amount_limit = int(m_below.group(2)) if m_below.group(2).isdigit() else 500
+        matches = [tx for tx in filtered_tx if tx.get("Amount", 0) < amount_limit]
+        entry_list = [{
+            "header": tx.get("Title", "") or tx.get("Transaction", ""),
+            "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date') or f'Period {tx.get('Period', '')}'}"
+        } for tx in matches]
+        resp = {
+            "chat": {
+                "header": f"Transactions Below ₹{amount_limit}",
+                "entries": entry_list if entry_list else [{"header": "", "detail": f"No transactions below ₹{amount_limit} for {period}."}]
+            }
+        }
+        resp["chat"] = add_smart_help_tip(resp["chat"], query)
+        return jsonify(resp)
 
     if query:
         query_lower = query.lower()
@@ -270,9 +269,6 @@ def ai_insight():
         income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
         merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period, merchant_category) if merchant_category else group_by_merchant(filtered_tx_prev, prev_period)
         payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
-
-
-
 
         prompt = f"""
 You are a smart financial chat assistant.
@@ -470,7 +466,6 @@ Required insight_groups (include only if relevant data is available):
 - Progress / Goal-Oriented Insights
 - At least 4-5 Smart Suggestions (each with category, amount, and count)
 - 2-3 Optional trends/alerts (including from above or invented)
-
 
 Respond in this JSON format:
 {{
