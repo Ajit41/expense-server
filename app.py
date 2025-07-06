@@ -266,10 +266,10 @@ def ai_insight():
         merchant_summary = group_by_merchant(filtered_tx, period, merchant_category) if merchant_category else group_by_merchant(filtered_tx, period)
         payment_summary = group_by_payment(filtered_tx, period)
 
-   	expense_summary_prev = group_by_category(filtered_tx_prev, prev_period, 0)
-   	 income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
-    	merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period, merchant_category) if merchant_category else group_by_merchant(filtered_tx_prev, prev_period)
-    	payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
+        expense_summary_prev = group_by_category(filtered_tx_prev, prev_period, 0)
+        income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
+        merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period, merchant_category) if merchant_category else group_by_merchant(filtered_tx_prev, prev_period)
+        payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
 
 
 
