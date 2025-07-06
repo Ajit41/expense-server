@@ -164,6 +164,63 @@ def build_summaries(tx_list, period, prev_period, merchant_category=None):
         })
     return summary
 
+def get_biggest_transactions(tx_list, period, top_n=3):
+    tx_in_period = [tx for tx in tx_list if tx.get("Period") == period]
+    sorted_tx = sorted(tx_in_period, key=lambda x: x.get("Amount", 0), reverse=True)
+    biggest = sorted_tx[:top_n]
+    entries = []
+    for tx in biggest:
+        title = tx.get("Title") or tx.get("Transaction") or tx.get("Merchant") or "Unknown"
+        amount = tx.get("Amount", 0)
+        date = tx.get("Date", "") or f"Period {period}"
+        entries.append({
+            "header": title,
+            "detail": f"₹{amount:,.2f} on {date}"
+        })
+    return {
+        "header": f"Top {top_n} Biggest Transactions",
+        "entries": entries
+    }
+
+def get_budget_progress_summary(expense_summary, budget, period):
+    total_expense = sum(float(item['amount'].replace('₹', '').replace(',', '')) for item in expense_summary)
+    percent = (total_expense / budget * 100) if budget else 0
+    entries = [{
+        "header": "Budget Progress",
+        "detail": f"₹{total_expense:,.2f} spent out of ₹{budget:,.2f} ({percent:.1f}%)"
+    }]
+    if percent >= 90:
+        entries.append({
+            "header": "Alert",
+            "detail": "You have used 90% or more of your budget!"
+        })
+    elif percent >= 75:
+        entries.append({
+            "header": "Alert",
+            "detail": "You have used 75% or more of your budget."
+        })
+    return {
+        "header": "Budget Progress",
+        "entries": entries
+    }
+
+def get_month_on_month_comparison(expense_summary, expense_summary_prev, period, prev_period):
+    def total(summary):
+        return sum(float(item['amount'].replace('₹', '').replace(',', '')) for item in summary)
+    total_this = total(expense_summary)
+    total_prev = total(expense_summary_prev)
+    diff = total_this - total_prev
+    percent = (diff / total_prev * 100) if total_prev else 0
+    trend = "increased" if diff > 0 else "decreased"
+    entries = [{
+        "header": f"{period} vs {prev_period}",
+        "detail": f"Total expenses {trend} by ₹{abs(diff):,.2f} ({percent:+.1f}%) — ₹{total_this:,.2f} vs ₹{total_prev:,.2f}"
+    }]
+    return {
+        "header": "Month-on-Month Comparison",
+        "entries": entries
+    }
+
 def construct_prompt(intent, summary, context):
     blocks = []
     if intent["summary"]:
@@ -233,6 +290,15 @@ def ai_insight():
     merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period, merchant_category) if merchant_category else group_by_merchant(filtered_tx_prev, prev_period)
     payment_summary = group_by_payment(filtered_tx, period)
     payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
+
+    # --- Compose insights
+    insight_groups = []
+    insight_groups.append(get_month_on_month_comparison(expense_summary, expense_summary_prev, period, prev_period))
+    insight_groups.append(get_budget_progress_summary(expense_summary, budget, period))
+    insight_groups.append(get_biggest_transactions(tx_list, period, top_n=3))
+
+    return jsonify({"insight_groups": insight_groups})
+ 
 
     m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
     if m_below:
@@ -383,6 +449,7 @@ You are a finance insight assistant for a personal expense tracker.
 - Spending Habit Alerts (frequent, time-of-day, or day-of-week patterns)
 - Avoidable Spending Suggestions (e.g., eating out, subscriptions, non-essential purchases)
 - Recurring Micro-Spends
+- Biggest Single Transactions
 - Spending Control Encouragement
 - Expense Density Map
 - Transaction Frequency
