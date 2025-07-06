@@ -211,7 +211,7 @@ def ai_insight():
         }), 200
 
     # --- Prompt for GPT-4o ---
-    prompt = f"""
+prompt = f"""
 You are a finance insight assistant for a personal expense tracker.
 
 - Only use the provided summaries/data blocks for your analysis.
@@ -246,11 +246,31 @@ Required insight_groups (include only if relevant data is available):
 - Recurring Micro-Spends
 - Spending Control Encouragement
 - Expense Density Map
-- Recurring Bills 
+- Predictive/Recurring Bills 
 - Breakdown & Awareness Insights
 - Progress / Goal-Oriented Insights
 - At least 4-5 Smart Suggestions (each with category, amount, and count)
-- 2-3 Optional trends/alerts (including from above or invented)
+- 2-3 Optional trends/alerts (including you can invent new)
+
+**If both the current and previous period summaries have data, you MUST always include:**
+- An "Expense Comparison" section comparing total expenses between the two periods.
+- A "Category Comparison" section listing which categories increased, decreased, or appeared/disappeared (with amounts and counts in the format).
+- A "Merchant Comparison" section comparing merchant spending between the two periods (with details if merchant data is present).
+- A "Payment Comparison" section comparing Payment spending between the two periods (with details if Payment data is present).
+
+**For Unusual/Anomaly Alerts:**
+- The "Unusual/Anomaly Alerts" section must always be present in insight_groups, even if it only says "No anomalies detected".
+- Always compare every category’s expense for the current and previous period, including small categories.
+- If any category’s spending has increased sharply compared to the previous period (for example, by more than 50%, or any large jump in amount or number of entries), you MUST include an "Anomaly" or "Unusual Spend" alert in the insight_groups.
+- Do not ignore small categories—if a category’s percentage increase is high (even if the total spend is small), you must include it as an anomaly.
+- Always show both the absolute amount increase and the percentage increase for each anomaly.
+- Include all categories that meet this rule, not just the largest or top ones.
+- If multiple categories have sharp increases, list them all as separate alerts in the output.
+- Clearly state the category name, this period’s amount and count, and the previous period’s amount and count, using the required format (“₹{{{{amt}}}} at {{{{category}}}} ({{{{count}}}} entries)”).
+- Explicitly mention the percentage or amount increase and call it out as unusual or unexpected.
+- Example: "Unusually high spending in Utility this month: ₹1200 (6 entries), up from ₹200 (2 entries) last month, +500%."
+- If no category shows a significant increase, you MUST output an alert: "No anomalies detected" for that period.
+
 
 Data available to you:
 period: {period}
