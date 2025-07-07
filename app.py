@@ -49,7 +49,18 @@ def group_by_category(tx_list, period, type_value):
 
 def format_category_summary(summary):
     return [{**item, "amount": f"₹{item['amount']:.2f}"} for item in summary]
-
+def fix_nulls_in_chat(resp_json):
+    # Patch: Replace 'null', None, '', with "₹0" or friendly fallback
+    if "chat" in resp_json and "entries" in resp_json["chat"]:
+        for entry in resp_json["chat"]["entries"]:
+            # Fix header
+            if entry.get("header") in (None, "", "null", "none", "-", "NaN"):
+                entry["header"] = "Info"
+            # Fix detail/text/value/amount
+            for key in ["detail", "text", "value", "amount"]:
+                if key in entry and entry[key] in (None, "", "null", "none", "-", "NaN"):
+                    entry[key] = "₹0"
+    return resp_json
 def group_by_merchant(tx_list, period, merchant_category=None):
     merchants = {}
     for tx in tx_list:
@@ -319,7 +330,7 @@ You are encouraged to invent and generate any other creative or AI-powered finan
 
 Example additional insights you can generate (if relevant):
 
-- Behavioral Analysis, Personalized Suggestions, Habit Detection, Opportunity Detection, Emotional/Contextual Insights, Seasonality & Life Events, Outlier/Anomaly Narratives, “Did You Know?” Facts, Custom Goals, Peer Comparison (if possible), Potential Triggers, Motivation/Encouragement, Risk Warnings, Weekly/Day-of-Week Trends, Fun/Positive Highlights, Missed Opportunities, Habit Loops, Visualization Suggestions, Action Plan, and more.
+- Behavioral Analysis, Personalized Suggestions, Habit Detection, Spending Consistency Score,Category Drift,Time-to-Spend Analysis,Emergency Buffer Check,Opportunity Detection, Emotional/Contextual Insights, Seasonality & Life Events, Outlier/Anomaly Narratives, “Did You Know?” Facts, Custom Goals, Peer Comparison (if possible), Potential Triggers, Motivation/Encouragement, Risk Warnings, Weekly/Day-of-Week Trends, Fun/Positive Highlights, Missed Opportunities, Habit Loops, Visualization Suggestions, Action Plan, and more.
 
 Your goal is to make insights as helpful, actionable, and engaging as possible. Use only the provided summaries and never recalculate from raw transactions.
 
@@ -348,8 +359,9 @@ payment_summary_prev: {json.dumps(payment_summary_prev_fmt, separators=(',', ':'
 
 User's question:
 {query}
-- Never output 'null'. If the answer is 0 or nothing, say "₹0" or "No data for this period".
-- Always answer chat Q&A using the summaries, even if the result is zero.
+- Do not output 'null' anywhere in your JSON. Use '₹0' or 'No data for this period' instead for all empty or zero values.
+- If unsure, always default to '₹0' or 'No data for this period'.
+
 
 If the user's query is a direct chat-based question, answer it in this format:
 {{
@@ -396,6 +408,8 @@ You may respond with both "chat" and "insight_groups" if appropriate. Use only t
             "parse_error": str(e),
             "raw_response": response_text
         }), 500
+
+    resp_json = fix_nulls_in_chat(resp_json)
 
     if "chat" in resp_json and "entries" in resp_json["chat"]:
         if not resp_json["chat"].get("header"):
