@@ -22,7 +22,6 @@ def get_prev_period(period):
     return ""
 
 def normalize_string(s):
-    """Normalize string for fuzzy search: lower, no space, accent removed."""
     if not s:
         return ""
     s = unicodedata.normalize("NFKD", str(s))
@@ -33,18 +32,6 @@ def friendly_fallback(value):
     if value in (None, "", "null", "none", "N/A", "-", "NaN"):
         return "Unable to get. Tip: Tap on Reports for month, category, payment, or payee breakdown."
     return value
-
-def find_txn_matches_for_period(tx_list, keyword, period):
-    norm_keyword = normalize_string(keyword)
-    matches = []
-    for tx in tx_list:
-        if tx.get("Period") == period:
-            for field in ["Transaction", "Merchant", "Category", "Method"]:
-                val = tx.get(field, "")
-                if norm_keyword and norm_keyword in normalize_string(val):
-                    matches.append(tx)
-                    break
-    return matches
 
 def group_by_category(tx_list, period, type_value):
     summary = []
@@ -61,9 +48,7 @@ def group_by_category(tx_list, period, type_value):
     return summary
 
 def format_category_summary(summary):
-    return [
-        {**item, "amount": f"₹{item['amount']:.2f}"} for item in summary
-    ]
+    return [{**item, "amount": f"₹{item['amount']:.2f}"} for item in summary]
 
 def group_by_merchant(tx_list, period, merchant_category=None):
     merchants = {}
@@ -71,9 +56,8 @@ def group_by_merchant(tx_list, period, merchant_category=None):
         if tx.get("Period") == period:
             m = tx.get("Merchant") or tx.get("Transaction") or tx.get("Category") or tx.get("Method") or "Unknown"
             amt = tx.get("Amount", 0)
-            if merchant_category:
-                if merchant_category.lower() not in m.lower():
-                    continue
+            if merchant_category and merchant_category.lower() not in m.lower():
+                continue
             if m in merchants:
                 merchants[m]["amount"] += amt
                 merchants[m]["count"] += 1
@@ -82,9 +66,7 @@ def group_by_merchant(tx_list, period, merchant_category=None):
     return list(merchants.values())
 
 def format_merchant_summary(summary):
-    return [
-        {**item, "amount": f"₹{item['amount']:.2f}"} for item in summary
-    ]
+    return [{**item, "amount": f"₹{item['amount']:.2f}"} for item in summary]
 
 def group_by_payment(tx_list, period):
     summary = {}
@@ -127,11 +109,8 @@ def generate_header_from_query(q, key_match=None):
 def add_smart_help_tip(chat_response, user_query):
     if not chat_response or "entries" not in chat_response:
         return chat_response
-
     q = user_query.lower()
     help_tip = None
-
-    # ---- EXPORT / DOWNLOAD / BACKUP / RESTORE INTENTS ----
     if any(kw in q for kw in ["download report", "export report", "save report", "report pdf"]):
         help_tip = "Tip: Tap on the 'Report' page, then tap the PDF icon in the top-right corner to download/export your report."
     elif any(kw in q for kw in ["download insight", "export insight", "insight pdf", "save insight"]):
@@ -144,7 +123,6 @@ def add_smart_help_tip(chat_response, user_query):
         help_tip = "Tip: The app will automatically back up your data daily to Google Cloud."
     elif "import" in q and ("google pay" in q or "phonepe" in q or "screenshot" in q):
         help_tip = "Tip: You can import Google Pay or PhonePe screenshots—use the import feature in the app for automatic transaction extraction."
-
     # ---- EXISTING INTENTS (category, payment, etc.) ----
     elif any(kw in q for kw in ["payee", "person", "who", "to whom"]):
         help_tip = "Tip: For transaction details, tap the payee in the Reports page for a full breakdown."
@@ -159,12 +137,10 @@ def add_smart_help_tip(chat_response, user_query):
     elif any(kw in q for kw in ["detail", "details", "summary"]):
         help_tip = "Tip: For more details, explore the Reports page for a full breakdown."
 
-    # ---- Only add the tip if it's not already a detailed entry ----
     entries = chat_response["entries"]
     detailed = any(re.match(r"\d{4}-\d{2}-\d{2}", entry.get("header", "")) for entry in entries)
     if help_tip and not detailed:
         entries.append({"header": "", "detail": help_tip})
-
     return chat_response
 
 def normalize_chat_entries(entries):
@@ -221,7 +197,6 @@ def ai_insight():
     data = request.get_json()
     tx_list = data.get("transactions", [])
     period = data.get("period", "")
-    merchant_category = data.get("merchant_category")
     if not period:
         return jsonify({"error": "Missing required field: period"}), 400
 
@@ -231,25 +206,17 @@ def ai_insight():
     days_left = data.get("days_left", 0)
     current_month_str = datetime.now().strftime("%Y%m")
 
-    # Filter transactions by period and prev_period
+    # Build summaries
     filtered_tx = [tx for tx in tx_list if tx.get("Period") == period]
     filtered_tx_prev = [tx for tx in tx_list if tx.get("Period") == prev_period]
-
-    # Always build all summaries (expense=type0, income=type1)
     expense_summary = group_by_category(filtered_tx, period, 0)
     income_summary = group_by_category(filtered_tx, period, 1)
     merchant_summary = group_by_merchant(filtered_tx, period)
     payment_summary = group_by_payment(filtered_tx, period)
-
     expense_summary_prev = group_by_category(filtered_tx_prev, prev_period, 0)
     income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
     merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period)
     payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
-
-    print("DEBUG | period:", period)
-    print("DEBUG | expense_summary (raw):", expense_summary)
-    print("DEBUG | total_expense (Type 0):", sum(item['amount'] for item in expense_summary))
-
     expense_summary_fmt = format_category_summary(expense_summary)
     expense_summary_prev_fmt = format_category_summary(expense_summary_prev)
     income_summary_fmt = format_category_summary(income_summary)
@@ -259,22 +226,7 @@ def ai_insight():
     payment_summary_fmt = format_payment_summary(payment_summary)
     payment_summary_prev_fmt = format_payment_summary(payment_summary_prev)
 
-    # -- Pattern-based quick chat logic: today/yesterday/week/month
-    if re.search(r"(today|yesterday|week|last week|month)", query.lower()):
-        resp = {
-            "chat": {
-                "header": "Spend for Today/Yesterday/Week/Month",
-                "entries": [
-                    {
-                        "header": "",
-                        "detail": "Tip: Tap on the expense card above or 'View all' to get week's transaction details."
-                    }
-                ]
-            }
-        }
-        return jsonify(resp)
-
-    # --- Pattern-based quick chat logic (for microspends, quick Q&A) ---
+    # Optional: Still handle "below X" quick queries yourself for speed/UI
     m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
     if m_below:
         amount_limit = int(m_below.group(2)) if m_below.group(2).isdigit() else 500
@@ -292,39 +244,7 @@ def ai_insight():
         resp["chat"] = add_smart_help_tip(resp["chat"], query)
         return jsonify(resp)
 
-    # --- Smart chat pattern: Merchant/Keyword Spend/Count/Orders ---
-    m_spend = re.search(
-        r"(?:how\s*much|total|spent|cost|order|orders|how\s*many|count)\s.*?(?:at|on|for)?\s*([a-zA-Z0-9\s]+)",
-        query,
-        re.I
-    )
-    if m_spend:
-        keyword = m_spend.group(1).strip()
-        merchant_matches = find_txn_matches_for_period(filtered_tx, keyword, period)
-        total = sum(tx.get("Amount", 0) for tx in merchant_matches)
-        count = len(merchant_matches)
-        if count > 0:
-            from collections import Counter
-            merchant_names = [
-                tx.get("Merchant") or tx.get("Transaction") or tx.get("Category") or tx.get("Method") or ""
-                for tx in merchant_matches
-            ]
-            display_merchant = keyword.title()
-            if merchant_names:
-                display_merchant = Counter(merchant_names).most_common(1)[0][0] or display_merchant
-            header = f"{display_merchant} Orders This Month"
-            detail = f"₹{total:,.2f} spent at {display_merchant} ({count} order{'s' if count > 1 else ''}) in {period}."
-        else:
-            header = f"{keyword.title()} Orders"
-            detail = f"Unable to get matching orders for '{keyword}'. Tip: Try a different spelling, or see Reports for summary."
-        return jsonify({
-            "chat": {
-                "header": header,
-                "entries": [{"header": "", "detail": detail}]
-            }
-        })
-
-    # ---- INSIGHT FLOW ----
+    # If there are NO transactions, respond as empty
     if not filtered_tx or (not expense_summary and not income_summary):
         return jsonify({
             "insight_groups": [{
@@ -336,7 +256,7 @@ def ai_insight():
             }]
         }), 200
 
-    # --- Prompt for GPT-4o ---
+    # --- Let GPT handle ALL other queries (chat and insights, any type) ---
     prompt = f"""
 You are a finance insight assistant for a personal expense tracker.
 
@@ -420,13 +340,27 @@ merchant_summary_prev: {json.dumps(merchant_summary_prev_fmt, separators=(',', '
 payment_summary: {json.dumps(payment_summary_fmt, separators=(',', ':'))}
 payment_summary_prev: {json.dumps(payment_summary_prev_fmt, separators=(',', ':'))}
 
-Respond in this JSON format:
+User's question:
+{query}
+
+If the user's query is a direct chat-based question, answer it in this format:
+{{
+  "chat": {{
+    "header": "...",
+    "entries": [
+      {{"header": "...", "detail": "..."}}
+    ]
+  }}
+}}
+
+If the user's query is a request for insights or analytics, answer it in this format:
 {{
   "insight_groups": [
-    {{"header": "...", "detail": "...", "type": "...", "category": "...", "transactions":[]}},
-    ...
+    {{"header": "...", "detail": "...", "type": "...", "category": "...", "transactions":[]}}
   ]
 }}
+
+You may respond with both "chat" and "insight_groups" if appropriate. Use only the summaries above for all answers. Never use any data except what is provided above.
 """
     try:
         chat_completion = client.chat.completions.create(
