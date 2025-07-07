@@ -124,6 +124,19 @@ def generate_header_from_query(q, key_match=None):
         return "Income Overview"
     return q.strip().capitalize()[:40] or "Chat Query"
 
+if re.search(r"(today|yesterday|week|last week|month)", query.lower()):
+    resp = {
+        "chat": {
+            "header": "Spend for Today/Yesterday/Week/Month",
+            "entries": [
+                {
+                    "header": "",
+                    "detail": "Tip: Tap on the expense card above or 'View all' to get week's transaction details."
+                }
+            ]
+        }
+    }
+    return jsonify(resp)
 def add_smart_help_tip(chat_response, user_query):
     if not chat_response or "entries" not in chat_response:
         return chat_response
