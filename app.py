@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import unicodedata
 from flask import Flask, request, jsonify
 from openai import OpenAI
 from datetime import datetime
@@ -20,14 +21,27 @@ def get_prev_period(period):
         return f"{year}{month:02d}"
     return ""
 
+def normalize_string(s):
+    """Normalize string for fuzzy search: lower, no space, accent removed."""
+    if not s:
+        return ""
+    s = unicodedata.normalize("NFKD", str(s))
+    s = s.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r'\s+', '', s.lower().strip())
+
+def friendly_fallback(value):
+    if value in (None, "", "null", "none", "N/A", "-", "NaN"):
+        return "Unable to get. Tip: Tap on Reports for month, category, payment, or payee breakdown."
+    return value
+
 def find_txn_matches_for_period(tx_list, keyword, period):
-    keyword = keyword.lower().strip()
+    norm_keyword = normalize_string(keyword)
     matches = []
     for tx in tx_list:
         if tx.get("Period") == period:
-            for field in ["Transaction", "Merchant", "Title", "Category", "Method"]:
+            for field in ["Transaction", "Merchant", "Category", "Method"]:
                 val = tx.get(field, "")
-                if keyword and keyword in str(val).lower():
+                if norm_keyword and norm_keyword in normalize_string(val):
                     matches.append(tx)
                     break
     return matches
@@ -55,7 +69,7 @@ def group_by_merchant(tx_list, period, merchant_category=None):
     merchants = {}
     for tx in tx_list:
         if tx.get("Period") == period:
-            m = tx.get("Merchant") or tx.get("Transaction") or tx.get("Title") or "Unknown"
+            m = tx.get("Merchant") or tx.get("Transaction") or tx.get("Category") or tx.get("Method") or "Unknown"
             amt = tx.get("Amount", 0)
             if merchant_category:
                 if merchant_category.lower() not in m.lower():
@@ -113,9 +127,26 @@ def generate_header_from_query(q, key_match=None):
 def add_smart_help_tip(chat_response, user_query):
     if not chat_response or "entries" not in chat_response:
         return chat_response
+
     q = user_query.lower()
     help_tip = None
-    if any(kw in q for kw in ["payee", "person", "who", "to whom"]):
+
+    # ---- EXPORT / DOWNLOAD / BACKUP / RESTORE INTENTS ----
+    if any(kw in q for kw in ["download report", "export report", "save report", "report pdf"]):
+        help_tip = "Tip: Tap on the 'Report' page, then tap the PDF icon in the top-right corner to download/export your report."
+    elif any(kw in q for kw in ["download insight", "export insight", "insight pdf", "save insight"]):
+        help_tip = "Tip: Tap on the 'Insight' page, then tap the PDF icon in the top-right corner to download/export insights."
+    elif any(kw in q for kw in ["download transaction", "export transaction", "backup transaction", "download excel", "export excel", "save excel"]):
+        help_tip = "Tip: Go to Settings, then tap on 'Back up/Restore' to export your transactions as Excel files."
+    elif any(kw in q for kw in ["upload transaction", "restore transaction", "import transaction", "restore excel", "import excel"]):
+        help_tip = "Tip: Go to Settings, then tap on 'Back up/Restore' to upload/restore transactions from an Excel file."
+    elif "backup" in q:
+        help_tip = "Tip: The app will automatically back up your data daily to Google Cloud."
+    elif "import" in q and ("google pay" in q or "phonepe" in q or "screenshot" in q):
+        help_tip = "Tip: You can import Google Pay or PhonePe screenshots—use the import feature in the app for automatic transaction extraction."
+
+    # ---- EXISTING INTENTS (category, payment, etc.) ----
+    elif any(kw in q for kw in ["payee", "person", "who", "to whom"]):
         help_tip = "Tip: For transaction details, tap the payee in the Reports page for a full breakdown."
     elif any(kw in q for kw in ["date wise", "by date", "datewise", "on which date", "all transactions", "each day"]):
         help_tip = "Tip: For date-wise or date-related queries, tap the category or Payment in the Reports for a full breakdown."
@@ -127,11 +158,63 @@ def add_smart_help_tip(chat_response, user_query):
         help_tip = "Tip: For month-wise or summary queries, tap the Month in the Reports for a full breakdown."
     elif any(kw in q for kw in ["detail", "details", "summary"]):
         help_tip = "Tip: For more details, explore the Reports page for a full breakdown."
+
+    # ---- Only add the tip if it's not already a detailed entry ----
     entries = chat_response["entries"]
     detailed = any(re.match(r"\d{4}-\d{2}-\d{2}", entry.get("header", "")) for entry in entries)
     if help_tip and not detailed:
         entries.append({"header": "", "detail": help_tip})
+
     return chat_response
+
+def normalize_chat_entries(entries):
+    normalized = []
+    for entry in entries:
+        if isinstance(entry, dict):
+            if "amount" in entry and "category" in entry:
+                normalized.append({
+                    "header": friendly_fallback(entry.get("category", "")),
+                    "detail": friendly_fallback(entry.get("amount", ""))
+                })
+            elif "title" in entry and "value" in entry:
+                value = entry["value"]
+                if isinstance(value, list):
+                    value = "\n".join(str(v) for v in value)
+                normalized.append({
+                    "header": friendly_fallback(entry.get("title", "")),
+                    "detail": friendly_fallback(value)
+                })
+            elif "content" in entry:
+                normalized.append({
+                    "header": friendly_fallback(entry.get("type", "")),
+                    "detail": friendly_fallback(entry.get("content", ""))
+                })
+            elif "detail" in entry and "header" in entry:
+                normalized.append({
+                    "header": friendly_fallback(entry.get("header", "")),
+                    "detail": friendly_fallback(entry.get("detail", ""))
+                })
+            elif "text" in entry:
+                normalized.append({
+                    "header": "",
+                    "detail": friendly_fallback(entry.get("text", ""))
+                })
+            else:
+                normalized.append({
+                    "header": "",
+                    "detail": friendly_fallback(", ".join(str(v) for v in entry.values()))
+                })
+        else:
+            normalized.append({
+                "header": "",
+                "detail": friendly_fallback(str(entry))
+            })
+    if not normalized:
+        normalized.append({
+            "header": "",
+            "detail": "Unable to get this data. Tip: Try a different keyword or see Reports."
+        })
+    return normalized
 
 @app.route('/ai-insight', methods=['POST'])
 def ai_insight():
@@ -163,12 +246,10 @@ def ai_insight():
     merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period)
     payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
 
-    # Debugging: print your raw and total expense
     print("DEBUG | period:", period)
     print("DEBUG | expense_summary (raw):", expense_summary)
     print("DEBUG | total_expense (Type 0):", sum(item['amount'] for item in expense_summary))
 
-    # Format only for prompt
     expense_summary_fmt = format_category_summary(expense_summary)
     expense_summary_prev_fmt = format_category_summary(expense_summary_prev)
     income_summary_fmt = format_category_summary(income_summary)
@@ -184,7 +265,7 @@ def ai_insight():
         amount_limit = int(m_below.group(2)) if m_below.group(2).isdigit() else 500
         matches = [tx for tx in filtered_tx if tx.get("Amount", 0) < amount_limit]
         entry_list = [{
-            "header": tx.get("Title", "") or tx.get("Transaction", ""),
+            "header": tx.get("Merchant") or tx.get("Transaction") or tx.get("Category") or tx.get("Method") or "",
             "detail": f"₹{tx.get('Amount', 0):,.2f} on {tx.get('Date') or f'Period {tx.get('Period', '')}'}"
         } for tx in matches]
         resp = {
@@ -196,7 +277,37 @@ def ai_insight():
         resp["chat"] = add_smart_help_tip(resp["chat"], query)
         return jsonify(resp)
 
-    # More chat patterns can go here (m_count, m_total, m_compare...)
+    # --- SMART CHAT PATTERN: Merchant/Keyword Spend/Count/Orders ---
+    m_spend = re.search(
+        r"(?:how\s*much|total|spent|cost|order|orders|how\s*many|count)\s.*?(?:at|on|for)?\s*([a-zA-Z0-9\s]+)",
+        query,
+        re.I
+    )
+    if m_spend:
+        keyword = m_spend.group(1).strip()
+        merchant_matches = find_txn_matches_for_period(filtered_tx, keyword, period)
+        total = sum(tx.get("Amount", 0) for tx in merchant_matches)
+        count = len(merchant_matches)
+        if count > 0:
+            from collections import Counter
+            merchant_names = [
+                tx.get("Merchant") or tx.get("Transaction") or tx.get("Category") or tx.get("Method") or ""
+                for tx in merchant_matches
+            ]
+            display_merchant = keyword.title()
+            if merchant_names:
+                display_merchant = Counter(merchant_names).most_common(1)[0][0] or display_merchant
+            header = f"{display_merchant} Orders This Month"
+            detail = f"₹{total:,.2f} spent at {display_merchant} ({count} order{'s' if count > 1 else ''}) in {period}."
+        else:
+            header = f"{keyword.title()} Orders"
+            detail = f"Unable to get matching orders for '{keyword}'. Tip: Try a different spelling, or see Reports for summary."
+        return jsonify({
+            "chat": {
+                "header": header,
+                "entries": [{"header": "", "detail": detail}]
+            }
+        })
 
     # ---- INSIGHT FLOW ----
     if not filtered_tx or (not expense_summary and not income_summary):
@@ -211,7 +322,7 @@ def ai_insight():
         }), 200
 
     # --- Prompt for GPT-4o ---
-prompt = f"""
+    prompt = f"""
 You are a finance insight assistant for a personal expense tracker.
 
 - Only use the provided summaries/data blocks for your analysis.
@@ -271,7 +382,6 @@ Required insight_groups (include only if relevant data is available):
 - Example: "Unusually high spending in Utility this month: ₹1200 (6 entries), up from ₹200 (2 entries) last month, +500%."
 - If no category shows a significant increase, you MUST output an alert: "No anomalies detected" for that period.
 
-
 Data available to you:
 period: {period}
 prev_period: {prev_period}
@@ -303,7 +413,6 @@ Respond in this JSON format:
   ]
 }}
 """
-
     try:
         chat_completion = client.chat.completions.create(
             model="gpt-4o",
@@ -331,58 +440,12 @@ Respond in this JSON format:
             "raw_response": response_text
         }), 500
 
-    def normalize_chat_entries(entries):
-        normalized = []
-        for entry in entries:
-            if isinstance(entry, dict):
-                if "amount" in entry and "category" in entry:
-                    normalized.append({
-                        "header": entry.get("category", ""),
-                        "detail": entry.get("amount", "")
-                    })
-                elif "title" in entry and "value" in entry:
-                    value = entry["value"]
-                    if isinstance(value, list):
-                        value = "\n".join(str(v) for v in value)
-                    normalized.append({
-                        "header": entry.get("title", ""),
-                        "detail": value
-                    })
-                elif "content" in entry:
-                    normalized.append({
-                        "header": entry.get("type", ""),
-                        "detail": entry.get("content", "")
-                    })
-                elif "detail" in entry and "header" in entry:
-                    normalized.append({
-                        "header": entry.get("header", ""),
-                        "detail": entry.get("detail", "")
-                    })
-                elif "text" in entry:
-                    normalized.append({
-                        "header": "",
-                        "detail": entry.get("text", "")
-                    })
-                else:
-                    normalized.append({
-                        "header": "",
-                        "detail": ", ".join(str(v) for v in entry.values())
-                    })
-            else:
-                normalized.append({
-                    "header": "",
-                    "detail": str(entry)
-                })
-        return normalized
-
     if "chat" in resp_json and "entries" in resp_json["chat"]:
         if not resp_json["chat"].get("header"):
             resp_json["chat"]["header"] = generate_header_from_query(query)
         resp_json["chat"]["entries"] = normalize_chat_entries(resp_json["chat"]["entries"])
         resp_json["chat"] = add_smart_help_tip(resp_json["chat"], query)
     return jsonify(resp_json)
-
-
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
