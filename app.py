@@ -124,19 +124,7 @@ def generate_header_from_query(q, key_match=None):
         return "Income Overview"
     return q.strip().capitalize()[:40] or "Chat Query"
 
-if re.search(r"(today|yesterday|week|last week|month)", query.lower()):
-    resp = {
-        "chat": {
-            "header": "Spend for Today/Yesterday/Week/Month",
-            "entries": [
-                {
-                    "header": "",
-                    "detail": "Tip: Tap on the expense card above or 'View all' to get week's transaction details."
-                }
-            ]
-        }
-    }
-    return jsonify(resp)
+
 def add_smart_help_tip(chat_response, user_query):
     if not chat_response or "entries" not in chat_response:
         return chat_response
@@ -290,6 +278,19 @@ def ai_insight():
         resp["chat"] = add_smart_help_tip(resp["chat"], query)
         return jsonify(resp)
 
+if re.search(r"(today|yesterday|week|last week|month)", query.lower()):
+    resp = {
+        "chat": {
+            "header": "Spend for Today/Yesterday/Week/Month",
+            "entries": [
+                {
+                    "header": "",
+                    "detail": "Tip: Tap on the expense card above or 'View all' to get week's transaction details."
+                }
+            ]
+        }
+    }
+    return jsonify(resp)
     # --- SMART CHAT PATTERN: Merchant/Keyword Spend/Count/Orders ---
     m_spend = re.search(
         r"(?:how\s*much|total|spent|cost|order|orders|how\s*many|count)\s.*?(?:at|on|for)?\s*([a-zA-Z0-9\s]+)",
