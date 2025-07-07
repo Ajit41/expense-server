@@ -123,7 +123,6 @@ def add_smart_help_tip(chat_response, user_query):
         help_tip = "Tip: The app will automatically back up your data daily to Google Cloud."
     elif "import" in q and ("google pay" in q or "phonepe" in q or "screenshot" in q):
         help_tip = "Tip: You can import Google Pay or PhonePe screenshots—use the import feature in the app for automatic transaction extraction."
-    # ---- EXISTING INTENTS (category, payment, etc.) ----
     elif any(kw in q for kw in ["payee", "person", "who", "to whom"]):
         help_tip = "Tip: For transaction details, tap the payee in the Reports page for a full breakdown."
     elif any(kw in q for kw in ["date wise", "by date", "datewise", "on which date", "all transactions", "each day"]):
@@ -136,7 +135,6 @@ def add_smart_help_tip(chat_response, user_query):
         help_tip = "Tip: For month-wise or summary queries, tap the Month in the Reports for a full breakdown."
     elif any(kw in q for kw in ["detail", "details", "summary"]):
         help_tip = "Tip: For more details, explore the Reports page for a full breakdown."
-
     entries = chat_response["entries"]
     detailed = any(re.match(r"\d{4}-\d{2}-\d{2}", entry.get("header", "")) for entry in entries)
     if help_tip and not detailed:
@@ -317,6 +315,14 @@ Required insight_groups (include only if relevant data is available):
 - Example: "Unusually high spending in Utility this month: ₹1200 (6 entries), up from ₹200 (2 entries) last month, +500%."
 - If no category shows a significant increase, you MUST output an alert: "No anomalies detected" for that period.
 
+You are encouraged to invent and generate any other creative or AI-powered financial insights if relevant, using only the summaries provided. Go beyond the required list above if you see unique patterns, opportunities, or helpful suggestions.
+
+Example additional insights you can generate (if relevant):
+
+- Behavioral Analysis, Personalized Suggestions, Habit Detection, Opportunity Detection, Emotional/Contextual Insights, Seasonality & Life Events, Outlier/Anomaly Narratives, “Did You Know?” Facts, Custom Goals, Peer Comparison (if possible), Potential Triggers, Motivation/Encouragement, Risk Warnings, Weekly/Day-of-Week Trends, Fun/Positive Highlights, Missed Opportunities, Habit Loops, Visualization Suggestions, Action Plan, and more.
+
+Your goal is to make insights as helpful, actionable, and engaging as possible. Use only the provided summaries and never recalculate from raw transactions.
+
 Data available to you:
 period: {period}
 prev_period: {prev_period}
@@ -342,6 +348,8 @@ payment_summary_prev: {json.dumps(payment_summary_prev_fmt, separators=(',', ':'
 
 User's question:
 {query}
+- Never output 'null'. If the answer is 0 or nothing, say "₹0" or "No data for this period".
+- Always answer chat Q&A using the summaries, even if the result is zero.
 
 If the user's query is a direct chat-based question, answer it in this format:
 {{
