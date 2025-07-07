@@ -124,7 +124,6 @@ def generate_header_from_query(q, key_match=None):
         return "Income Overview"
     return q.strip().capitalize()[:40] or "Chat Query"
 
-
 def add_smart_help_tip(chat_response, user_query):
     if not chat_response or "entries" not in chat_response:
         return chat_response
@@ -260,7 +259,22 @@ def ai_insight():
     payment_summary_fmt = format_payment_summary(payment_summary)
     payment_summary_prev_fmt = format_payment_summary(payment_summary_prev)
 
-    # --- PATTERN-BASED QUICK CHAT LOGIC (for microspends, quick Q&A) ---
+    # -- Pattern-based quick chat logic: today/yesterday/week/month
+    if re.search(r"(today|yesterday|week|last week|month)", query.lower()):
+        resp = {
+            "chat": {
+                "header": "Spend for Today/Yesterday/Week/Month",
+                "entries": [
+                    {
+                        "header": "",
+                        "detail": "Tip: Tap on the expense card above or 'View all' to get week's transaction details."
+                    }
+                ]
+            }
+        }
+        return jsonify(resp)
+
+    # --- Pattern-based quick chat logic (for microspends, quick Q&A) ---
     m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
     if m_below:
         amount_limit = int(m_below.group(2)) if m_below.group(2).isdigit() else 500
@@ -278,20 +292,7 @@ def ai_insight():
         resp["chat"] = add_smart_help_tip(resp["chat"], query)
         return jsonify(resp)
 
-if re.search(r"(today|yesterday|week|last week|month)", query.lower()):
-    resp = {
-        "chat": {
-            "header": "Spend for Today/Yesterday/Week/Month",
-            "entries": [
-                {
-                    "header": "",
-                    "detail": "Tip: Tap on the expense card above or 'View all' to get week's transaction details."
-                }
-            ]
-        }
-    }
-    return jsonify(resp)
-    # --- SMART CHAT PATTERN: Merchant/Keyword Spend/Count/Orders ---
+    # --- Smart chat pattern: Merchant/Keyword Spend/Count/Orders ---
     m_spend = re.search(
         r"(?:how\s*much|total|spent|cost|order|orders|how\s*many|count)\s.*?(?:at|on|for)?\s*([a-zA-Z0-9\s]+)",
         query,
