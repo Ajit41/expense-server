@@ -226,6 +226,15 @@ def ai_insight():
     income_summary_prev = group_by_category(filtered_tx_prev, prev_period, 1)
     merchant_summary_prev = group_by_merchant(filtered_tx_prev, prev_period)
     payment_summary_prev = group_by_payment(filtered_tx_prev, prev_period)
+
+
+  # ----- THIS IS THE CRITICAL PART -----
+    expense_total = sum(item['amount'] for item in expense_summary)
+    income_total = sum(item['amount'] for item in income_summary)
+    expense_total_prev = sum(item['amount'] for item in expense_summary_prev)
+    income_total_prev = sum(item['amount'] for item in income_summary_prev)
+
+    # Format for display only
     expense_summary_fmt = format_category_summary(expense_summary)
     expense_summary_prev_fmt = format_category_summary(expense_summary_prev)
     income_summary_fmt = format_category_summary(income_summary)
@@ -234,6 +243,7 @@ def ai_insight():
     merchant_summary_prev_fmt = format_merchant_summary(merchant_summary_prev)
     payment_summary_fmt = format_payment_summary(payment_summary)
     payment_summary_prev_fmt = format_payment_summary(payment_summary_prev)
+
 
     # Optional: Still handle "below X" quick queries yourself for speed/UI
     m_below = re.search(r"(below|under|less than|upto|micro\-spend|microspend|small)\s*₹?\s*([0-9]+)", query.lower())
@@ -271,6 +281,13 @@ You are a finance insight assistant for a personal expense tracker.
 
 - Only use the provided summaries/data blocks for your analysis.
 - Never recalculate totals or counts from raw transactions. Use ONLY the provided summaries below for your analysis.
+- For all total expense, income, or comparison numbers, you must use only these provided values:
+    - expense_total: ₹{expense_total:,}
+    - income_total: ₹{income_total:,}
+    - expense_total_prev: ₹{expense_total_prev:,}
+    - income_total_prev: ₹{income_total_prev:,}
+
+- If a section or insight references "total expense", "total income", or comparisons, ALWAYS use the explicit total above. Do not attempt to add up category/merchant values to get the total.
 - Always use the Indian Rupee symbol (₹) for all amounts. Do NOT use "$", "Rs", or any other currency symbol.
 
 For every section, smart suggestion, notable trend, alert, or data point (including “small writing” and optional/creative insights):
@@ -344,10 +361,14 @@ current_month: {current_month_str}
 # EXPENSE
 category_summary: {json.dumps(expense_summary_fmt, separators=(',', ':'))}
 category_summary_prev: {json.dumps(expense_summary_prev_fmt, separators=(',', ':'))}
+expense_total: ₹{expense_total:,}
+expense_total_prev: ₹{expense_total_prev:,}
 
 # INCOME
 income_summary: {json.dumps(income_summary_fmt, separators=(',', ':'))}
 income_summary_prev: {json.dumps(income_summary_prev_fmt, separators=(',', ':'))}
+income_total: ₹{income_total:,}
+income_total_prev: ₹{income_total_prev:,}
 
 # MERCHANT
 merchant_summary: {json.dumps(merchant_summary_fmt, separators=(',', ':'))}
@@ -356,6 +377,7 @@ merchant_summary_prev: {json.dumps(merchant_summary_prev_fmt, separators=(',', '
 # PAYMENT
 payment_summary: {json.dumps(payment_summary_fmt, separators=(',', ':'))}
 payment_summary_prev: {json.dumps(payment_summary_prev_fmt, separators=(',', ':'))}
+
 
 User's question:
 {query}
